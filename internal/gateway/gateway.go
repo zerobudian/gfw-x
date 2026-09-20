@@ -2,13 +2,14 @@ package gateway
 
 import (
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"gfw-x/internal/config"
 	"gfw-x/internal/detect"
-	"gfw-x/internal/dpi"
 	"gfw-x/internal/dns"
+	"gfw-x/internal/dpi"
 	"gfw-x/internal/flow"
 	"gfw-x/internal/logging"
 	"gfw-x/internal/metrics"
@@ -44,15 +45,18 @@ type job struct {
 
 // Gateway runs the Fast Path / Slow Path data-plane architecture.
 type Gateway struct {
-	cfg    *config.Config
-	mode   atomic.Int32 // index into config.ValidModes
-	flows  *flow.Table
-	repo   atomic.Pointer[rules.RuleRepo]
-	pol    atomic.Pointer[policy.Engine]
-	det    *detect.Engine
-	dpiEng *dpi.Engine
-	m      *metrics.Registry
-	logger *logging.Pipeline
+	cfg        *config.Config
+	mode       atomic.Int32 // index into config.ValidModes
+	flows      *flow.Table
+	modeMu     sync.Mutex // serialize mode and active repository changes
+	baseRepo   *rules.RuleRepo
+	customRepo *rules.RuleRepo
+	repo       atomic.Pointer[rules.RuleRepo]
+	pol        atomic.Pointer[policy.Engine]
+	det        *detect.Engine
+	dpiEng     *dpi.Engine
+	m          *metrics.Registry
+	logger     *logging.Pipeline
 
 	fast   chan *job // bounded
 	slow   chan *job // bounded
@@ -67,20 +71,21 @@ type Gateway struct {
 // New builds a gateway. Call Start to launch workers.
 func New(cfg *config.Config, repo *rules.RuleRepo, m *metrics.Registry, logger *logging.Pipeline, det *detect.Engine, d *dpi.Engine) *Gateway {
 	g := &Gateway{
-		cfg:    cfg,
-		det:    det,
-		dpiEng: d,
-		m:      m,
-		logger: logger,
-		flows:  flow.NewTable(cfg.Runtime.FlowShards, time.Duration(cfg.Runtime.FlowTTL)*time.Second),
-		fast:   make(chan *job, cfg.Runtime.ChannelCapacity),
-		slow:   make(chan *job, cfg.Runtime.ChannelCapacity),
-		stopCh: make(chan struct{}),
-		start:  time.Now(),
+		cfg:      cfg,
+		det:      det,
+		dpiEng:   d,
+		m:        m,
+		logger:   logger,
+		baseRepo: repo,
+		flows:    flow.NewTable(cfg.Runtime.FlowShards, time.Duration(cfg.Runtime.FlowTTL)*time.Second),
+		fast:     make(chan *job, cfg.Runtime.ChannelCapacity),
+		slow:     make(chan *job, cfg.Runtime.ChannelCapacity),
+		stopCh:   make(chan struct{}),
+		start:    time.Now(),
 	}
-	g.SetMode(cfg.Default.Mode)
 	g.repo.Store(repo)
 	g.pol.Store(policy.NewEngine(repo))
+	g.SetMode(cfg.Default.Mode)
 	return g
 }
 
@@ -111,26 +116,56 @@ func (g *Gateway) SetMode(m config.Mode) error {
 	if i < 0 {
 		return ErrInvalidMode
 	}
+	g.modeMu.Lock()
+	defer g.modeMu.Unlock()
+	selected := g.baseRepo
+	if m == config.ModeCustom && g.customRepo != nil {
+		selected = g.customRepo
+	}
+	if selected != nil && selected != g.repo.Load() {
+		g.setActiveRepo(selected)
+	}
 	g.mode.Store(int32(i))
 	return nil
 }
 
-// SetActiveRepo swaps the active rule repo (Custom mode). The swap is atomic
-// so workers observe either the old or the new (repo, engine) pair, never a
-// torn mix.
+// SetCustomRepo installs the configured custom rules and activates them when
+// the gateway is already in custom mode.
+func (g *Gateway) SetCustomRepo(repo *rules.RuleRepo) {
+	g.modeMu.Lock()
+	defer g.modeMu.Unlock()
+	g.customRepo = repo
+	if g.Mode() == config.ModeCustom && repo != nil {
+		g.setActiveRepo(repo)
+	}
+}
+
+// SetActiveRepo replaces the rules for the current mode. Existing flows keep
+// their cached decision; newly classified flows use the new repository.
 func (g *Gateway) SetActiveRepo(repo *rules.RuleRepo) {
+	g.modeMu.Lock()
+	defer g.modeMu.Unlock()
+	if g.Mode() == config.ModeCustom {
+		g.customRepo = repo
+	} else {
+		g.baseRepo = repo
+	}
+	g.setActiveRepo(repo)
+}
+
+func (g *Gateway) setActiveRepo(repo *rules.RuleRepo) {
 	eng := policy.NewEngine(repo)
 	g.pol.Store(eng)
 	g.repo.Store(repo)
 }
 
 // Exported accessors for the dashboard / API.
-func (g *Gateway) Table() *flow.Table              { return g.flows }
-func (g *Gateway) Metrics() *metrics.Registry      { return g.m }
-func (g *Gateway) Rules() *rules.RuleRepo          { return g.repo.Load() }
-func (g *Gateway) Detector() *detect.Engine        { return g.det }
-func (g *Gateway) Classifies() (c, slow uint64)    { return g.classifies.Load(), g.slowPass.Load() }
-func (g *Gateway) Uptime() time.Time               { return g.start }
+func (g *Gateway) Table() *flow.Table           { return g.flows }
+func (g *Gateway) Metrics() *metrics.Registry   { return g.m }
+func (g *Gateway) Rules() *rules.RuleRepo       { return g.repo.Load() }
+func (g *Gateway) Detector() *detect.Engine     { return g.det }
+func (g *Gateway) Classifies() (c, slow uint64) { return g.classifies.Load(), g.slowPass.Load() }
+func (g *Gateway) Uptime() time.Time            { return g.start }
 
 // LogStats returns logging pipeline shedding counters.
 func (g *Gateway) LogStats() map[string]int64 {
@@ -265,8 +300,14 @@ func (g *Gateway) finish(j *job, slow bool) {
 		DstPort:  f.DstPort,
 		Category: f.Category,
 	}
-	ip := net.IP(f.SrcIP[:]); if ip != nil { a.SrcIP = ip }
-	ip2 := net.IP(f.DstIP[:]); if ip2 != nil { a.DstIP = ip2 }
+	ip := net.IP(f.SrcIP[:])
+	if ip != nil {
+		a.SrcIP = ip
+	}
+	ip2 := net.IP(f.DstIP[:])
+	if ip2 != nil {
+		a.DstIP = ip2
+	}
 
 	var detRep *policy.DetectionReport
 	cat := f.Category
@@ -440,14 +481,18 @@ func ipStr(ip [16]byte, _ int) string {
 
 func itoa(v byte) string {
 	switch v {
-	case 0: return "0"
-	case 1: return "1"
+	case 0:
+		return "0"
+	case 1:
+		return "1"
 	}
 	return strconvU(int(v))
 }
 
 func strconvU(v int) string {
-	if v == 0 { return "0" }
+	if v == 0 {
+		return "0"
+	}
 	var b [4]byte
 	i := len(b)
 	for v > 0 {
