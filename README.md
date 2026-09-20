@@ -125,7 +125,15 @@ cd .. && go build -o gfwx ./cmd/gfwx
 
 # 关闭内置的演示流量生成器（生产建议 --no-gen）
 ./gfwx run --no-gen --pprof
+
+# 用离线抓包（经典 .pcap）作为真实流量输入，取代合成生成器
+./gfwx run --pcap ./sample.pcap --pcap-rate 1000
 ```
+
+`--pcap` 提供**真实流量输入**：用纯 Go（gopacket/pcapgo，无需 root / cgo）离线读取 classic `.pcap`，
+逐帧解码（Ethernet / IPv4 / IPv6 + TCP / UDP）并经数据面过滤，可用于对真实流量的策略评估与演示。
+`--pcap-rate N` 可选地限速到 N 包/秒（0 = 不限速）。
+> 抓包示例：`tcpdump -i eth0 -w sample.pcap`（或 Wireshark 导出 `.pcap`）。支持 classic 格式。
 
 启动后打开：<http://127.0.0.1:8443> （默认账号 `admin` / 密码 `admin`，请尽快修改）。
 
@@ -158,6 +166,8 @@ cd .. && go build -o gfwx ./cmd/gfwx
 ```
 gfwx run                         启动网关 + Web 面板
 gfwx run --mode bypass|block|custom
+gfwx run --pcap sample.pcap [--pcap-rate N]   离线回放抓包作为真实流量输入
+gfwx run --no-gen --pprof                    关闭合成生成器 / 开启 pprof
 gfwx validate --config ... --rules ...
 gfwx bench --flows N --workers N
 gfwx export [--zip] [--redact] [--dir ...]
