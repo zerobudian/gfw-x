@@ -39,7 +39,9 @@ func TestReplayIngestsUDPFrame(t *testing.T) {
 
 	g := newReplayTestGateway(t)
 	r := NewReplay(g, f.Name(), 0)
-	r.Start()
+	if err := r.Start(); err != nil {
+		t.Fatal(err)
+	}
 	defer r.Stop()
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -50,6 +52,38 @@ func TestReplayIngestsUDPFrame(t *testing.T) {
 		t.Fatalf("expected >=1 ingested packet from replay, got 0")
 	} else {
 		t.Logf("replay ingested %d packet(s)", n)
+	}
+}
+
+// TestBundledSampleReplay checks the committed sample through the real replay
+// parser, including its declared Ethernet link type.
+func TestBundledSampleReplay(t *testing.T) {
+	g := newReplayTestGateway(t)
+	r := NewReplay(g, "../../sample.pcap", 0)
+	if err := r.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer r.Stop()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && g.m.C.Packets.Load() < 5 {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := g.m.C.Packets.Load(); got != 5 {
+		t.Fatalf("sample replay: got %d packets, want 5", got)
+	}
+}
+
+func TestReplayRejectsMissingOrInvalidCapture(t *testing.T) {
+	g := newReplayTestGateway(t)
+	if err := NewReplay(g, "missing.pcap", 0).Start(); err == nil {
+		t.Fatal("missing capture must fail at startup")
+	}
+	bad := t.TempDir() + "/invalid.pcap"
+	if err := os.WriteFile(bad, []byte("not a pcap"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewReplay(g, bad, 0).Start(); err == nil {
+		t.Fatal("invalid capture must fail at startup")
 	}
 }
 

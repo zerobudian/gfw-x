@@ -28,8 +28,14 @@ func frame(sport, dport uint16, src, dst string, payload []byte) []byte {
 		SrcIP: mustIP(src), DstIP: mustIP(dst)}
 	udp := &layers.UDP{SrcPort: layers.UDPPort(sport), DstPort: layers.UDPPort(dport)}
 	_ = udp.SetNetworkLayerForChecksum(ip)
-	eth := &layers.Ethernet{EthernetType: layers.EthernetTypeIPv4}
-	_ = gopacket.SerializeLayers(b, opts, eth, ip, udp, gopacket.Payload(payload))
+	eth := &layers.Ethernet{
+		SrcMAC:       net.HardwareAddr{0x02, 0, 0, 0, 0, 1},
+		DstMAC:       net.HardwareAddr{0x02, 0, 0, 0, 0, 2},
+		EthernetType: layers.EthernetTypeIPv4,
+	}
+	if err := gopacket.SerializeLayers(b, opts, eth, ip, udp, gopacket.Payload(payload)); err != nil {
+		panic(err)
+	}
 	return b.Bytes()
 }
 
