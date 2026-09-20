@@ -1,0 +1,63 @@
+# GFW X example rule set — Developer preset (TXT format)
+# Format: ALLOW / BLOCK / OBSERVE / RATELIMIT <value>
+#   value starting with `*.` matches the domain and all subdomains (suffix/wildcard)
+#   *_CATEGORY <name> blocks an entire category (social-media, adult, gambling, malicious, vpn-tunnel)
+# Priority: explicit allow > explicit block > category rule > default policy
+
+# --- Block categories first (category rules rank below explicit allows) ---
+BLOCK_CATEGORY adult
+BLOCK_CATEGORY gambling
+BLOCK_CATEGORY malicious
+
+# --- AI services ---
+ALLOW *.openai.com
+ALLOW *.anthropic.com
+ALLOW *.claude.ai
+ALLOW *.googleapis.com
+ALLOW gemini.google.com
+
+# --- Open source communities ---
+ALLOW *.github.com
+ALLOW *.githubusercontent.com
+ALLOW *.gitlab.com
+ALLOW *.sourceforge.net
+ALLOW *.huggingface.co
+
+# --- Cloudflare Pages ---
+ALLOW *.pages.dev
+ALLOW *.cloudflarercdn.com
+
+# --- Google Cloud + essential Google APIs ---
+ALLOW *.google.com
+ALLOW *.googlevideo.com
+ALLOW *.ggpht.com
+ALLOW *.gstatic.com
+ALLOW *.gvt1.com
+ALLOW *.googleapis.cn
+
+# --- X ---
+ALLOW *.x.com
+ALLOW *.twitter.com
+ALLOW *.twimg.com
+
+# --- WeChat ---
+ALLOW *.weixin.qq.com
+ALLOW *.wechat.com
+ALLOW wx.qq.com
+
+# --- QQ ---
+ALLOW *.qq.com
+ALLOW *.qpic.cn
+
+# --- Douyin ---
+ALLOW *.douyin.com
+ALLOW *.douyinvod.com
+ALLOW *.amemv.com
+
+# --- Software updates / CDN / auth ---
+ALLOW *.update.microsoft.com
+ALLOW *.download.microsoft.com
+ALLOW *.npupdate.com
+ALLOW *.s3.amazonaws.com
+ALLOW *.akamai.net
+ALLOW *.apple.com

@@ -1,0 +1,10 @@
+# GFW X custom rules (TXT)
+# Loaded when mode = custom (or as a merge source in the dashboard).
+# Start empty: add your own ALLOW / BLOCK / OBSERVE / RATELIMIT / *_CATEGORY lines.
+#
+# Examples:
+# ALLOW api.mycompany.com
+# ALLOW *.internal.example
+# BLOCK ads-tracker.net
+# BLOCK_CATEGORY vpn-tunnel
+# RATELIMIT *.video-heavy.example

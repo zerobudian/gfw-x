@@ -1,0 +1,24 @@
+# Binaries
+/gfwx
+/dist/
+
+# Web build deps & output (output is embedded into the binary)
+web/node_modules/
+web/tsconfig.tsbuildinfo
+internal/api/dist/
+
+# Runtime data / logs
+data/
+
+# Export output
+/export/
+
+# Go
+*.test
+*.out
+coverage.*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

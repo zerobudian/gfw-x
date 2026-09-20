@@ -1,0 +1,49 @@
+# GFW X configuration (YAML). JSON is also accepted (.json extension).
+# Tune for your own / authorized network. LAN-only by default for safety.
+
+defaults:
+  # mode: bypass | block | custom
+  mode: block
+  theme: system        # system | light | dark
+  lang: system         # system | zh-CN | en
+  dpi_sample_ratio: 0.02   # 2% of unknown/suspicious flows get DPI (metadata only)
+
+server:
+  # Bind host:port. 127.0.0.1 = localhost only. For LAN use 0.0.0.0:8443 or a LAN IP.
+  listen: "127.0.0.1:8443"
+  lan_only: true
+  allowed_ips: []          # additional allowed bind IPs when lan_only=true
+  origin_allowed: ""       # optional extra CSRF origin (host) — keep empty unless remote
+  auth:
+    enabled: true
+    username: admin
+    # SHA-256(salt+pw) then SHA-256(inner+salt). Default password is: admin
+    # CHANGE THIS. Generate a new hash and set session_token to a random hex.
+    password_hash: "e158d9f24412583212b3d7fb5beab018afb0209364c75b4d69779c37eb75ecc1"
+    session_token: ""      # if empty, a random token is generated at startup
+
+logging:
+  format: jsonl            # jsonl | csv | ring
+  dir: data/logs
+  max_files: 10
+  max_bytes: 104857600     # 100 MB per file, then rotation
+  max_ring: 4096           # in-memory ring capacity for the dashboard event list
+  queue_size: 65536        # bounded async pipeline queue
+  sample_ratio: 1.0        # full metadata; on pressure this degrades automatically
+  redact: true             # never store payloads; privacy masking on export default
+
+runtime:
+  flow_shards: 32          # sharded flow table to avoid a single global lock
+  worker_pool: 4           # fixed worker pool (no goroutine-per-packet)
+  channel_capacity: 8192   # bounded channel
+  flow_ttl_seconds: 900
+  fast_path_cache_ttl_seconds: 300
+
+detect:
+  enabled: true
+  auto_action: observe     # allow | observe | ratelimit | reject | drop
+  confidence_threshold: 0.85   # only >= this ever applies an auto action
+
+# Rules loaded at startup. Use `gfwx export` / the dashboard to export/edit.
+rules_file: "configs/rules/developer.txt"
+custom_rules_file: "configs/rules/custom.txt"

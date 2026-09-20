@@ -1,0 +1,12 @@
+.git
+.gitignore
+.github
+web/node_modules
+web/tsconfig.tsbuildinfo
+data
+dist
+export
+*.md
+Makefile
+Dockerfile
+configs/gfw-x.service

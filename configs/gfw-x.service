@@ -1,0 +1,23 @@
+[Unit]
+Description=GFW X - high-performance network policy gateway
+Documentation=https://github.com
+After=network.target
+
+[Service]
+# GFW X must run with CAP_NET_ADMIN / CAP_NET_RAW for packet handling.
+# The runtime binary reads YAML/JSON config and writes logs under WorkingDirectory.
+ExecStart=/usr/local/bin/gfwx run --config /etc/gfw-x/config.yaml --no-gen
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+ReadWritePaths=/var/log/gfw-x /var/lib/gfw-x
+# Capabilities for traffic inspection (adjust to your platform).
+# AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target
