@@ -440,6 +440,37 @@ custom_rules_file: %q
 	if sawBase {
 		t.Fatalf("custom mode must replace base repo; only-in-base rule leaked in, out=%q", buf.String())
 	}
+
+	// Switching modes must select the corresponding repository without a restart.
+	switchAndRead := func(mode string) string {
+		t.Helper()
+		resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/mode", port),
+			"application/json", bytes.NewBufferString(fmt.Sprintf(`{"mode":%q}`, mode)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("switch to %s: HTTP %d", mode, resp.StatusCode)
+		}
+		resp, err = http.Get(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(body)
+	}
+	if body := switchAndRead("block"); !strings.Contains(body, "only-in-base.example") || strings.Contains(body, "only-in-custom.example") {
+		t.Fatalf("block mode must restore base rules, got %s", body)
+	}
+	if body := switchAndRead("custom"); !strings.Contains(body, "only-in-custom.example") || strings.Contains(body, "only-in-base.example") {
+		t.Fatalf("custom mode must restore custom rules, got %s", body)
+	}
 }
 
 // pickFreePort returns an available TCP port on loopback.
