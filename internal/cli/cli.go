@@ -68,6 +68,9 @@ Run flags:
   --mode m        Start mode: bypass | block | custom
   --gen-rate n    Synthetic traffic generator rate (events/sec)
   --no-gen        Disable the synthetic traffic generator
+  --pcap path     Replay a classic .pcap file as the traffic input (takes
+                  precedence over the generator)
+  --pcap-rate n   Cap replay emissions/sec (0 = no pacing)
   --pprof         Enable /debug/pprof
 
 Validate flags:
@@ -121,6 +124,8 @@ func cmdRun(args []string) int {
 	mode := fs.String("mode", "", "start mode override")
 	genRate := fs.Int("gen-rate", 200, "generator events/sec")
 	noGen := fs.Bool("no-gen", false, "disable generator")
+	pcapPath := fs.String("pcap", "", "replay a classic .pcap file as real traffic input")
+	pcapRate := fs.Int("pcap-rate", 0, "cap replay emissions/sec (0 = no pacing)")
 	pprofOn := fs.Bool("pprof", false, "enable pprof")
 	_ = fs.Parse(args)
 
@@ -191,13 +196,20 @@ func cmdRun(args []string) int {
 	gw.Start()
 
 	var gen *gateway.Generator
-	if !*noGen {
+	var rpl *gateway.Replay
+	if *pcapPath != "" {
+		rpl = gateway.NewReplay(gw, *pcapPath, *pcapRate)
+		rpl.Start()
+	} else if !*noGen {
 		gen = gateway.NewGenerator(gw, *genRate)
 		gen.Start()
 	}
 	defer func() {
 		if gen != nil {
 			gen.Stop()
+		}
+		if rpl != nil {
+			rpl.Stop()
 		}
 		gw.Stop()
 		pipe.Close()
@@ -213,6 +225,9 @@ func cmdRun(args []string) int {
 	log.Printf("GFW X %s started (mode=%s)", version.Info(), gw.Mode())
 	if gen != nil {
 		log.Printf("synthetic traffic generator active at %d ev/s (disable with --no-gen)", *genRate)
+	}
+	if rpl != nil {
+		log.Printf("pcap replay active: %s", *pcapPath)
 	}
 
 	waitForSignal()
