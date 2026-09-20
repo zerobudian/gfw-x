@@ -37,9 +37,19 @@ func NewReplay(g *Gateway, path string, maxPPS int) *Replay {
 	}
 }
 
-// Start begins replaying the capture in the background.
-func (r *Replay) Start() {
-	go r.loop()
+// Start validates the capture before reporting success and begins replaying it.
+func (r *Replay) Start() error {
+	f, err := os.Open(r.path)
+	if err != nil {
+		return err
+	}
+	reader, err := pcapgo.NewReader(f)
+	if err != nil {
+		f.Close()
+		return err
+	}
+	go r.loop(f, reader)
+	return nil
 }
 
 // Stop halts replay.
@@ -47,17 +57,8 @@ func (r *Replay) Stop() {
 	r.once.Do(func() { close(r.stopCh) })
 }
 
-func (r *Replay) loop() {
-	f, err := os.Open(r.path)
-	if err != nil {
-		return
-	}
+func (r *Replay) loop(f *os.File, reader *pcapgo.Reader) {
 	defer f.Close()
-
-	reader, err := pcapgo.NewReader(f)
-	if err != nil {
-		return
-	}
 
 	lt := reader.LinkType()
 	pacing := time.Duration(0)

@@ -199,7 +199,12 @@ func cmdRun(args []string) int {
 	var rpl *gateway.Replay
 	if *pcapPath != "" {
 		rpl = gateway.NewReplay(gw, *pcapPath, *pcapRate)
-		rpl.Start()
+		if err := rpl.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "pcap replay: %v\n", err)
+			gw.Stop()
+			pipe.Close()
+			return 1
+		}
 	} else if !*noGen {
 		gen = gateway.NewGenerator(gw, *genRate)
 		gen.Start()
