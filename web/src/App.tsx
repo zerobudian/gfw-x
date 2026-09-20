@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore, createContext, useContext } from 'react'
 import { api } from './api'
-import { messages, THEME_KEY, LANG_KEY, effectiveTheme, effectiveLang, detectTheme, detectLang, type Lang, type Theme } from './i18n'
+import { messages, THEME_KEY, LANG_KEY, effectiveLang, detectTheme, detectLang, type Lang, type Theme } from './i18n'
 import { DashboardPage } from './pages/Dashboard'
 import { TrafficPage } from './pages/Traffic'
 import { RulesPage } from './pages/Rules'
@@ -12,8 +12,21 @@ import { ImportPage } from './pages/ImportExport'
 import { SettingsPage } from './pages/Settings'
 
 function subscribe(cb: () => void) {
-  window.addEventListener('storage', cb)
-  return () => window.removeEventListener('storage', cb)
+  window.addEventListener('hashchange', cb)
+  return () => window.removeEventListener('hashchange', cb)
+}
+
+function applyTheme(t: Theme) {
+  const themeEl = document.documentElement
+  if (t === 'system') {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    const on = () => { themeEl.dataset.theme = mq.matches ? 'dark' : 'light' }
+    on()
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }
+  themeEl.dataset.theme = t
+  return () => {}
 }
 
 export type UIState = {
@@ -59,8 +72,9 @@ export function App() {
   const [authed, setAuthed] = useState<null | boolean>(null)
 
   useEffect(() => {
-    applyTheme(theme)
+    const cleanup = applyTheme(theme)
     document.documentElement.lang = effectiveLang(lang === 'system' ? null : lang)
+    return cleanup
   }, [theme, lang])
 
   useEffect(() => {
@@ -85,20 +99,6 @@ export function App() {
         <div className="login-wrap"><div className="login-card card">GFW X</div></div>
       </RCtx.Provider>
     )
-  }
-
-  const applyTheme = (t: Theme) => {
-    const themeEl = document.documentElement
-    if (t === 'system') {
-      const effT = effectiveTheme(null)
-      themeEl.dataset.theme = effT
-      const mq = window.matchMedia('(prefers-color-scheme: dark)')
-      const on = () => { themeEl.dataset.theme = mq.matches ? 'dark' : 'light' }
-      mq.addEventListener('change', on)
-      return () => mq.removeEventListener('change', on)
-    }
-    themeEl.dataset.theme = t
-    return () => {}
   }
 
   // persist + push to server, keep local mirrors so Settings reflects server
@@ -155,7 +155,7 @@ function Layout({ k, theme, lang, onTheme, onLang }: { k: (s: string) => string;
   useEffect(() => {
     let alive = true
     const tick = async () => {
-      try { const st = await api.status(); if (alive) { setStatus(st); if (st.theme) onTheme(st.theme as Theme); if (st.lang) onLang(st.lang as Lang) } } catch { /* server restart */ }
+      try { const st = await api.status(); if (alive) setStatus(st) } catch { /* server restart */ }
     }
     tick()
     const id = window.setInterval(tick, 2000)

@@ -1,4 +1,5 @@
 const base = '/api'
+let csrfToken = ''
 
 async function req<T>(method: string, path: string, body?: unknown, opts: { form?: boolean } = {}): Promise<T> {
   const headers: Record<string, string> = {}
@@ -10,6 +11,13 @@ async function req<T>(method: string, path: string, body?: unknown, opts: { form
       headers['Content-Type'] = 'application/json'
       payload = JSON.stringify(body)
     }
+  }
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && path !== '/login') {
+    if (!csrfToken) {
+      const status = await req<AuthStatus>('GET', '/auth/status')
+      csrfToken = status.csrf
+    }
+    headers['X-CSRF-Token'] = csrfToken
   }
   const res = await fetch(base + path, { method, headers, body: payload })
   const ct = res.headers.get('content-type') || ''
@@ -24,6 +32,9 @@ async function req<T>(method: string, path: string, body?: unknown, opts: { form
   }
   if (!res.ok) {
     throw new Error(data.error || data.raw || `HTTP ${res.status}`)
+  }
+  if (path === '/login' || path === '/auth/status') {
+    csrfToken = (data as LoginResult | AuthStatus).csrf || ''
   }
   return data as T
 }
@@ -149,8 +160,8 @@ export const api = {
   conflicts: () => req<Conflict[]>('GET', '/rules/conflicts'),
   presets: () => req<Record<string, string>>('GET', '/rules/presets'),
   applyPreset: (preset: string) => req<{ preset: string; rules: number }>('POST', '/rules/presets', { preset }),
-  importPreview: (content: string) => req<{ parsed: Rule[]; count: number; conflicts: Conflict[]; applied: boolean }>('POST', '/rules/import/preview', { content }),
-  importRules: (content: string, format?: string) => req<{ imported: number; applied: boolean }>('POST', '/rules/import', { content, format }),
+  importPreview: (content: string) => req<{ parsed: Rule[]; count: number; conflicts: Conflict[]; applied: boolean }>('POST', '/rules/import/preview', new URLSearchParams({ content }), { form: true }),
+  importRules: (content: string, format?: string) => req<{ imported: number; applied: boolean }>('POST', '/rules/import', new URLSearchParams({ content, ...(format ? { format } : {}) }), { form: true }),
   config: () => req<any>('GET', '/config'),
   authStatus: () => req<AuthStatus>('GET', '/auth/status'),
   detect: () => req<DetectInfo>('GET', '/detect'),
