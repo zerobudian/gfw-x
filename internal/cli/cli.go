@@ -170,6 +170,18 @@ func cmdRun(args []string) int {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
 	}
+	// Custom-mode rules at startup: the gateway keeps one active repo and
+	// custom mode uses whichever repo is currently loaded. Honor
+	// custom_rules_file so the process can start directly into custom policy
+	// instead of silently using the base rules_file set.
+	if cfg.Default.Mode == config.ModeCustom && cfg.CustomFile != "" {
+		crepo, cerr := loadRules(cfg.CustomFile, "")
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "load custom rules: %v\n", cerr)
+			return 1
+		}
+		repo = crepo
+	}
 
 	m := metrics.New(cfg.Logging.MaxRing)
 	det := detect.NewEngine(cfg.Detect.Enabled, cfg.Detect.Threshold, cfg.Detect.AutoAction == "reject" || cfg.Detect.AutoAction == "drop")

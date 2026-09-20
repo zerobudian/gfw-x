@@ -2,6 +2,11 @@ package integration
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -339,6 +344,113 @@ func waitExit(cmd *exec.Cmd) <-chan struct{} {
 	ch := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(ch) }()
 	return ch
+}
+
+// TestCLI_RunCustomModeLoadsCustomFile is a regression test for the custom
+// mode startup: when defaults.mode=custom, the active rule repo must come from
+// custom_rules_file, not rules_file.
+func TestCLI_RunCustomModeLoadsCustomFile(t *testing.T) {
+	bin, err := buildCLI()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	dir := t.TempDir()
+
+	baseRules := filepath.Join(dir, "base.txt")
+	if err := os.WriteFile(baseRules, []byte("BLOCK only-in-base.example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	customRules := filepath.Join(dir, "custom.txt")
+	if err := os.WriteFile(customRules, []byte("BLOCK only-in-custom.example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	port := pickFreePort(t)
+	cfg := fmt.Sprintf(`server:
+  listen: "127.0.0.1:%d"
+  lan_only: true
+  auth:
+    enabled: false
+logging:
+  format: "ring"
+  queue_size: 128
+defaults:
+  mode: "custom"
+rules: []
+rules_file: %q
+custom_rules_file: %q
+`, port, baseRules, customRules)
+	cfgPath := filepath.Join(dir, "cfg.yaml")
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "run", "--config", cfgPath, "--no-gen")
+	cmd.Dir = repoRoot()
+	var buf syncBuf
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	defer func() {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-waitExit(cmd):
+		case <-time.After(10 * time.Second):
+			_ = cmd.Process.Kill()
+		}
+	}()
+
+	base := fmt.Sprintf("http://127.0.0.1:%d/api/rules", port)
+	var got []map[string]any
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(base)
+		if err == nil {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				if json.Unmarshal(body, &got) != nil {
+					got = nil
+				} else if len(got) > 0 {
+					break
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if len(got) == 0 {
+		t.Fatalf("no rules reported by custom-mode gateway, out=%q", buf.String())
+	}
+
+	var sawCustom, sawBase bool
+	for _, r := range got {
+		m, _ := json.Marshal(r["matchers"])
+		if strings.Contains(string(m), "only-in-custom.example") {
+			sawCustom = true
+		}
+		if strings.Contains(string(m), "only-in-base.example") {
+			sawBase = true
+		}
+	}
+	if !sawCustom {
+		t.Fatalf("custom mode must load custom_rules_file; only-in-custom rule missing, out=%q", buf.String())
+	}
+	if sawBase {
+		t.Fatalf("custom mode must replace base repo; only-in-base rule leaked in, out=%q", buf.String())
+	}
+}
+
+// pickFreePort returns an available TCP port on loopback.
+func pickFreePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("pick free port: %v", err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
 }
 
 // validConfigYAML returns a minimal but validating server+busy config.
