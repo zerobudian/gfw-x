@@ -2,10 +2,12 @@
 /gfwx
 /dist/
 
-# Web build deps & output (output is embedded into the binary)
+# Web build deps & output
+# NOTE: internal/api/dist/ is intentionally TRACKED. The dashboard bundle is
+# embedded via `//go:embed dist/*`, so committing it keeps a fresh clone able
+# to `go build` without a Node toolchain. Regenerate with `make web`.
 web/node_modules/
 web/tsconfig.tsbuildinfo
-internal/api/dist/
 
 # Runtime data / logs
 data/
