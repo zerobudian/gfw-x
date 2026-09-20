@@ -170,17 +170,14 @@ func cmdRun(args []string) int {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
 	}
-	// Custom-mode rules at startup: the gateway keeps one active repo and
-	// custom mode uses whichever repo is currently loaded. Honor
-	// custom_rules_file so the process can start directly into custom policy
-	// instead of silently using the base rules_file set.
-	if cfg.Default.Mode == config.ModeCustom && cfg.CustomFile != "" {
-		crepo, cerr := loadRules(cfg.CustomFile, "")
-		if cerr != nil {
-			fmt.Fprintf(os.Stderr, "load custom rules: %v\n", cerr)
+	// Keep both repositories available for later mode switches.
+	var customRepo *rules.RuleRepo
+	if cfg.CustomFile != "" {
+		customRepo, err = loadRules(cfg.CustomFile, "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load custom rules: %v\n", err)
 			return 1
 		}
-		repo = crepo
 	}
 
 	m := metrics.New(cfg.Logging.MaxRing)
@@ -188,6 +185,9 @@ func cmdRun(args []string) int {
 	dpiEng := dpi.NewEngine(true, cfg.Default.DPI)
 
 	gw := gateway.New(cfg, repo, m, pipe, det, dpiEng)
+	if customRepo != nil {
+		gw.SetCustomRepo(customRepo)
+	}
 	gw.Start()
 
 	var gen *gateway.Generator
