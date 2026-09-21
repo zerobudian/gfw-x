@@ -55,7 +55,7 @@ func manualLogin(t *testing.T, base, user, pass string) (token, csrf string) {
 func TestAuth_LoginAndToken(t *testing.T) {
 	gw, _, cleanup := newGateway(t, config.ModeBlock, "")
 	defer cleanup()
-	base, token, _ := startAuthedAPI(t, gw)
+	base, _, _ := startAuthedAPI(t, gw)
 
 	t.Run("valid_login_sets_cookie", func(t *testing.T) {
 		c := newClient()
@@ -93,8 +93,11 @@ func TestAuth_LoginAndToken(t *testing.T) {
 	})
 
 	t.Run("valid_bearer_200", func(t *testing.T) {
+		// Session rotation means a token captured before another login is
+		// invalidated. Log in fresh to obtain a currently-valid token.
 		c := newClient()
-		resp, body := doReq(t, c, "GET", base+"/api/status", "", "", map[string]string{"Authorization": "Bearer " + token})
+		freshTok, _ := manualLogin(t, base, "admin", "admin")
+		resp, body := doReq(t, c, "GET", base+"/api/status", "", "", map[string]string{"Authorization": "Bearer " + freshTok})
 		if resp.StatusCode != 200 {
 			t.Fatalf("valid bearer must be 200, got %d %s", resp.StatusCode, body)
 		}

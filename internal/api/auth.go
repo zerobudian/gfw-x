@@ -2,7 +2,6 @@ package api
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"net"
@@ -10,9 +9,29 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"gfw-x/internal/config"
 )
+
+// sessionTTL is how long a login session stays valid before re-authentication
+// is required. Sessions are rotated on every successful login.
+const sessionTTL = 12 * time.Hour
+
+// loginWindow / loginMax bound failed-login attempts per source IP (the
+// simplest effective rate limit: a fixed window + lockout).
+const (
+	loginWindow = time.Minute
+	loginMax    = 10
+	loginLock   = 30 * time.Second
+)
+
+// failCounter tracks failed-login attempts for one source address.
+type failCounter struct {
+	count    int
+	resetAt  time.Time
+	lockedAt time.Time
+}
 
 // Auth implements session auth + CSRF double-submit protection.
 type Auth struct {
@@ -22,19 +41,25 @@ type Auth struct {
 	passwordHash string
 	token        string // admin session token
 	csrfToken    string
+	tokenExpiry  time.Time
+
+	fails map[string]*failCounter
 }
 
 // NewAuth builds an auth layer from config.
 func NewAuth(cfg *config.Auth) *Auth {
+	token := cfg.SessionToken
+	if token == "" {
+		token = randomToken()
+	}
 	a := &Auth{
 		enabled:      cfg.Enabled,
 		username:     cfg.Username,
 		passwordHash: cfg.PasswordHash,
-		token:        cfg.SessionToken,
-		csrfToken:    randomHex(16),
-	}
-	if a.token == "" {
-		a.token = randomHex(24)
+		token:        token,
+		csrfToken:    randomToken(),
+		tokenExpiry:  time.Now().Add(sessionTTL),
+		fails:        map[string]*failCounter{},
 	}
 	return a
 }
@@ -46,7 +71,28 @@ func (a *Auth) Enabled() bool {
 	return a.enabled
 }
 
-// SetPassword stores a salted hash of the new password.
+// PasswordIsArgon2 reports whether the configured hash uses the modern scheme.
+func (a *Auth) PasswordIsArgon2() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return isArgon2Hash(a.passwordHash)
+}
+
+// PasswordConfigured reports whether an admin password hash is set at all.
+func (a *Auth) PasswordConfigured() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.passwordHash != ""
+}
+
+// resetFailCount clears the rate-limit state for a source IP on success.
+func (a *Auth) resetFailCount(ip string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.fails, ip)
+}
+
+// SetPassword stores an Argon2id hash of the new password.
 func (a *Auth) SetPassword(password string, username string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -65,19 +111,85 @@ func (a *Auth) CSRF() string {
 	return a.csrfToken
 }
 
-// HashPassword computes the salted SHA-256 used to store admin passwords.
-func hashPassword(pw string) string {
-	salt := "gfw-x-static-salt" // non-secret diversification salt
-	inner := sha256.Sum256([]byte(salt + pw))
-	outer := sha256.Sum256([]byte(string(inner[:]) + salt))
-	return hex.EncodeToString(outer[:])
+// verifyPassword checks a plaintext password, transparently upgrading a legacy
+// SHA-256 hash to Argon2id on success (migration path) so existing configs are
+// not locked out.
+func (a *Auth) verifyPassword(pw string) (bool, string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	upgraded, ok := verifyAndUpgrade(pw, a.passwordHash)
+	if ok && upgraded != "" {
+		// Persist the migration for the rest of this process runtime.
+		a.passwordHash = upgraded
+	}
+	return ok, upgraded
 }
 
-// verifyPassword checks a plaintext password against the stored hash.
-func (a *Auth) verifyPassword(pw string) bool {
-	got := hashPassword(pw)
-	want := a.passwordHash
-	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+// allowLogin enforces the failed-login rate limit per source IP.
+func (a *Auth) allowLogin(ip string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.enabled {
+		return true
+	}
+	c, ok := a.fails[ip]
+	if !ok {
+		c = &failCounter{}
+		a.fails[ip] = c
+	}
+	now := time.Now()
+	if c.resetAt.IsZero() || now.After(c.resetAt) {
+		c.count = 0
+		c.lockedAt = time.Time{}
+		c.resetAt = now.Add(loginWindow)
+	}
+	if now.Before(c.lockedAt) {
+		return false
+	}
+	if c.count >= loginMax {
+		c.lockedAt = now.Add(loginLock)
+		c.count = 0
+		c.resetAt = now.Add(loginWindow)
+		return false
+	}
+	return true
+}
+
+// recordFailure increments the failed-login counter for a source IP.
+func (a *Auth) recordFailure(ip string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c, ok := a.fails[ip]
+	if !ok {
+		return
+	}
+	c.count++
+	if c.count >= loginMax {
+		c.lockedAt = time.Now().Add(loginLock)
+		c.count = 0
+		c.resetAt = time.Now().Add(loginWindow)
+	}
+}
+
+// issueSession rotates the session token and resets its expiry (each successful
+// login invalidates the previous session and yields a fresh CSRF token).
+func (a *Auth) issueSession() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.token = randomToken()
+	a.csrfToken = randomToken()
+	a.tokenExpiry = time.Now().Add(sessionTTL)
+	return a.token
+}
+
+// sessionValid reports whether the supplied session token is valid and unexpired.
+func (a *Auth) sessionValid(got string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if time.Now().After(a.tokenExpiry) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(a.token)) == 1
 }
 
 // verify returns true if a request carries a valid Bearer token or session.
@@ -86,14 +198,31 @@ func (a *Auth) verify(r *http.Request) bool {
 		return true
 	}
 	h := r.Header.Get("Authorization")
-	if strings.HasPrefix(h, "Bearer ") && subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(h, "Bearer ")), []byte(a.token)) == 1 {
+	if strings.HasPrefix(h, "Bearer ") && a.sessionValid(strings.TrimPrefix(h, "Bearer ")) {
 		return true
 	}
 	ck, err := r.Cookie("gfwx_session")
-	if err == nil && subtle.ConstantTimeCompare([]byte(ck.Value), []byte(a.token)) == 1 {
+	if err == nil && a.sessionValid(ck.Value) {
 		return true
 	}
 	return false
+}
+
+// RemoteIP extracts a best-effort client IP from the request.
+func (a *Auth) RemoteIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i >= 0 {
+			xff = xff[:i]
+		}
+		if ip := net.ParseIP(strings.TrimSpace(xff)); ip != nil {
+			return ip.String()
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // checkCSRF validates Origin/Referer and the CSRF token for mutations.
@@ -161,6 +290,9 @@ func randomHex(n int) string {
 	}
 	return hex.EncodeToString(b)
 }
+
+// randomToken returns a 32-byte random hex session / CSRF token.
+func randomToken() string { return randomHex(32) }
 
 // Settings holds dashboard preferences (theme/lang), persisted in memory.
 type Settings struct {

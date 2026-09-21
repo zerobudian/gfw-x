@@ -24,10 +24,10 @@ type Options struct {
 
 // Bundle is collected data ready for export.
 type Bundle struct {
-	Config   *config.Config
-	Rules    []*rules.Rule
-	Metrics  *metrics.Registry
-	Format   string // jsonl | csv | ring
+	Config  *config.Config
+	Rules   []*rules.Rule
+	Metrics *metrics.Registry
+	Format  string // jsonl | csv | ring
 }
 
 // writeFile writes data to path with 0644 perms.
@@ -148,27 +148,27 @@ func writeZIP(path string, b *Bundle, opts Options) error {
 
 // System holds system.json content.
 type System struct {
-	Time       string  `json:"time"`
-	Version    string  `json:"version"`
-	GoVersion  string  `json:"go"`
-	GOOS       string  `json:"goos"`
-	GOARCH     string  `json:"goarch"`
-	GOMAXPROCS int     `json:"gomaxprocs"`
-	MemoryMB   float64 `json:"memory_mb"`
-	NumGoroutine int   `json:"goroutines"`
+	Time         string  `json:"time"`
+	Version      string  `json:"version"`
+	GoVersion    string  `json:"go"`
+	GOOS         string  `json:"goos"`
+	GOARCH       string  `json:"goarch"`
+	GOMAXPROCS   int     `json:"gomaxprocs"`
+	MemoryMB     float64 `json:"memory_mb"`
+	NumGoroutine int     `json:"goroutines"`
 }
 
 func systemInfo() System {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	return System{
-		Time:       time.Now().UTC().Format(time.RFC3339),
-		Version:    version.Info(),
-		GoVersion:  runtime.Version(),
-		GOOS:       runtime.GOOS,
-		GOARCH:     runtime.GOARCH,
-		GOMAXPROCS: runtime.GOMAXPROCS(0),
-		MemoryMB:   float64(m.HeapAlloc) / (1024 * 1024),
+		Time:         time.Now().UTC().Format(time.RFC3339),
+		Version:      version.Info(),
+		GoVersion:    runtime.Version(),
+		GOOS:         runtime.GOOS,
+		GOARCH:       runtime.GOARCH,
+		GOMAXPROCS:   runtime.GOMAXPROCS(0),
+		MemoryMB:     float64(m.HeapAlloc) / (1024 * 1024),
 		NumGoroutine: runtime.NumGoroutine(),
 	}
 }

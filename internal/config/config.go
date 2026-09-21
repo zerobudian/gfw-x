@@ -91,7 +91,7 @@ type Server struct {
 	Listen string `yaml:"listen" json:"listen"`
 	// PublicWeb forbids remote/pubnets listeners. When true the server refuses
 	// to bind to non-locallan addresses unless explicitly allowed.
-	LanOnly bool `yaml:"lan_only" json:"lan_only"`
+	LanOnly    bool     `yaml:"lan_only" json:"lan_only"`
 	AllowedIps []string `yaml:"allowed_ips" json:"allowed_ips"`
 	Auth       Auth     `yaml:"auth" json:"auth"`
 	// OriginAllowed is used for CSRF/origin checks.
@@ -101,12 +101,12 @@ type Server struct {
 // Logging configures the async log pipeline.
 type Logging struct {
 	// Format is jsonl, csv, or ring (in-memory only).
-	Format      string `yaml:"format" json:"format"` // jsonl|csv|ring
-	Dir         string `yaml:"dir" json:"dir"`
-	MaxFiles    int    `yaml:"max_files" json:"max_files"`
-	MaxBytes    int64  `yaml:"max_bytes" json:"max_bytes"`
-	MaxRing     int    `yaml:"max_ring" json:"max_ring"`
-	QueueSize   int    `yaml:"queue_size" json:"queue_size"`
+	Format      string  `yaml:"format" json:"format"` // jsonl|csv|ring
+	Dir         string  `yaml:"dir" json:"dir"`
+	MaxFiles    int     `yaml:"max_files" json:"max_files"`
+	MaxBytes    int64   `yaml:"max_bytes" json:"max_bytes"`
+	MaxRing     int     `yaml:"max_ring" json:"max_ring"`
+	QueueSize   int     `yaml:"queue_size" json:"queue_size"`
 	SampleRatio float64 `yaml:"sample_ratio" json:"sample_ratio"`
 	// RedactPayloads / privacy: never store payloads by default.
 	Redact bool `yaml:"redact" json:"redact"`
@@ -119,14 +119,49 @@ type Runtime struct {
 	ChannelCapacity  int `yaml:"channel_capacity" json:"channel_capacity"`
 	FlowTTL          int `yaml:"flow_ttl_seconds" json:"flow_ttl_seconds"`
 	FastPathCacheTTL int `yaml:"fast_path_cache_ttl_seconds" json:"fast_path_cache_ttl_seconds"`
+	// TraceSampleRatio is the fraction of decisions that build a full
+	// DecisionTrace (0..1). 0 disables explain traces; 1 traces everything.
+	TraceSampleRatio float64 `yaml:"trace_sample_ratio" json:"trace_sample_ratio"`
 }
 
-// Disabled default values are filled at load time.
+// DataplaneMode selects the live packet ingress backend.
+type DataplaneMode string
+
+const (
+	// DataplanePCAP is the offline replay source (works everywhere).
+	DataplanePCAP DataplaneMode = "pcap"
+	// DataplaneNFQueue is the Linux NFQUEUE backend (real gateway).
+	DataplaneNFQueue DataplaneMode = "nfqueue"
+)
+
+// NFQueueCfg configures the NFQUEUE data plane.
+type NFQueueCfg struct {
+	QueueNum       int    `yaml:"queue_num" json:"queue_num"`
+	MaxQueueLen    int    `yaml:"max_queue_len" json:"max_queue_len"`
+	VerdictTimeout int    `yaml:"verdict_timeout_ms" json:"verdict_timeout_ms"` // ms
+	FailMode       string `yaml:"fail_mode" json:"fail_mode"`                   // open | closed
+	// MaxWorkers caps worker parallelism for verdict dispatch.
+	MaxWorkers int `yaml:"max_workers" json:"max_workers"`
+}
+
+// Dataplane configures which packet source is active.
+type Dataplane struct {
+	Mode    DataplaneMode `yaml:"mode" json:"mode"`
+	NFQueue NFQueueCfg    `yaml:"nfqueue" json:"nfqueue"`
+}
+
+// Shadow configures observe-only rule validation.
+type Shadow struct {
+	Enabled   bool   `yaml:"enabled" json:"enabled"`
+	RulesFile string `yaml:"rules_file" json:"rules_file"`
+}
+
+// Defaults is the default values section.
 type Defaults struct {
-	Mode      Mode  `yaml:"mode" json:"mode"`
-	Theme     Theme `yaml:"theme" json:"theme"`
-	Lang      Lang  `yaml:"lang" json:"lang"`
-	DPI       float64 `yaml:"dpi_sample_ratio" json:"dpi_sample_ratio"`
+	Mode  Mode    `yaml:"mode" json:"mode"`
+	Theme Theme   `yaml:"theme" json:"theme"`
+	Lang  Lang    `yaml:"lang" json:"lang"`
+	DPI   float64 `yaml:"dpi_sample_ratio" json:"dpi_sample_ratio"`
 }
 
 // Detect configures the VPN/tunnel detection engine.
@@ -139,13 +174,15 @@ type Detect struct {
 
 // Config is the top-level gateway configuration.
 type Config struct {
-	Default    Defaults `yaml:"defaults" json:"defaults"`
-	Server     Server   `yaml:"server" json:"server"`
-	Logging    Logging  `yaml:"logging" json:"logging"`
-	Runtime    Runtime  `yaml:"runtime" json:"runtime"`
-	Detect     Detect   `yaml:"detect" json:"detect"`
-	RulesFile  string   `yaml:"rules_file" json:"rules_file"`
-	CustomFile string   `yaml:"custom_rules_file" json:"custom_rules_file"`
+	Default    Defaults  `yaml:"defaults" json:"defaults"`
+	Server     Server    `yaml:"server" json:"server"`
+	Logging    Logging   `yaml:"logging" json:"logging"`
+	Runtime    Runtime   `yaml:"runtime" json:"runtime"`
+	Detect     Detect    `yaml:"detect" json:"detect"`
+	Dataplane  Dataplane `yaml:"dataplane" json:"dataplane"`
+	Shadow     Shadow    `yaml:"shadow" json:"shadow"`
+	RulesFile  string    `yaml:"rules_file" json:"rules_file"`
+	CustomFile string    `yaml:"custom_rules_file" json:"custom_rules_file"`
 }
 
 // Load reads a YAML or JSON config file. JSON is detected by extension then
@@ -231,9 +268,18 @@ func DefaultConfig() *Config {
 			ChannelCapacity:  8192,
 			FlowTTL:          900,
 			FastPathCacheTTL: 300,
+			TraceSampleRatio: 0.05,
 		},
+		Dataplane: Dataplane{
+			Mode: DataplanePCAP,
+			NFQueue: NFQueueCfg{
+				QueueNum: 100, MaxQueueLen: 4096, VerdictTimeout: 500,
+				FailMode: "open", MaxWorkers: 4,
+			},
+		},
+		Shadow: Shadow{Enabled: false},
 		Detect: Detect{
-			Enabled:   true,
+			Enabled:    true,
 			AutoAction: "observe",
 			Threshold:  0.85,
 		},
@@ -277,6 +323,30 @@ func (c *Config) Validate() error {
 	}
 	if c.Default.DPI < 0 || c.Default.DPI > 1 {
 		return errors.New("defaults.dpi_sample_ratio must be in [0,1]")
+	}
+	if c.Runtime.TraceSampleRatio < 0 || c.Runtime.TraceSampleRatio > 1 {
+		return errors.New("runtime.trace_sample_ratio must be in [0,1]")
+	}
+	switch c.Dataplane.Mode {
+	case DataplanePCAP, DataplaneNFQueue:
+	default:
+		return fmt.Errorf("dataplane.mode must be pcap or nfqueue (got %q)", c.Dataplane.Mode)
+	}
+	if c.Dataplane.Mode == DataplaneNFQueue {
+		if c.Dataplane.NFQueue.QueueNum < 0 {
+			return errors.New("dataplane.nfqueue.queue_num must be >= 0")
+		}
+		if c.Dataplane.NFQueue.MaxQueueLen <= 0 {
+			c.Dataplane.NFQueue.MaxQueueLen = 4096
+		}
+		if c.Dataplane.NFQueue.VerdictTimeout < 0 {
+			return errors.New("dataplane.nfqueue.verdict_timeout_ms must be >= 0")
+		}
+		switch strings.ToLower(c.Dataplane.NFQueue.FailMode) {
+		case "", "open", "closed":
+		default:
+			return fmt.Errorf("dataplane.nfqueue.fail_mode must be open or closed (got %q)", c.Dataplane.NFQueue.FailMode)
+		}
 	}
 	return nil
 }

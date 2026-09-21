@@ -14,12 +14,12 @@ import (
 // dashboard populated without touching real network interfaces. It produces
 // realistic handshake samples (TLS ClientHello / DNS / WireGuard).
 type Generator struct {
-	g          *Gateway
-	rate       atomic.Int64 // events per second
-	stopCh     chan struct{}
-	corpus     []string
-	blocked    []string
-	rng        *rand.Rand
+	g       *Gateway
+	rate    atomic.Int64 // events per second
+	stopCh  chan struct{}
+	corpus  []string
+	blocked []string
+	rng     *rand.Rand
 }
 
 // NewGenerator builds a generator over a gateway.
@@ -154,7 +154,7 @@ func buildClientHello(domain string) []byte {
 	sni := []byte(domain)
 	// extension: server_name (0x0000), len, list_len(2), name_type(1), len(2)...
 	var name bytesBuffer
-	put16(&name, 0)         // name_type: host_name
+	put16(&name, 0) // name_type: host_name
 	put16(&name, uint16(len(sni)))
 	name.Write(sni)
 	listLen := len(name.B)
@@ -167,12 +167,17 @@ func buildClientHello(domain string) []byte {
 
 	// build handshake: ClientHello
 	var hello bytesBuffer
-	put16(&hello, 0x0303)                      // client_version TLS1.2
-	for i := 0; i < 32; i++ { hello.WriteByte(byte(i)) } // random
-	hello.WriteByte(0)                          // session id length
-	put16(&hello, 0x0002); hello.Write([]byte{0x00, 0x2f}) // cipher suites TLS_RSA
-	hello.WriteByte(1); hello.WriteByte(0)      // compression
-	put16(&hello, uint16(len(extBody.B))); hello.Write(extBody.B) // extensions
+	put16(&hello, 0x0303) // client_version TLS1.2
+	for i := 0; i < 32; i++ {
+		hello.WriteByte(byte(i))
+	} // random
+	hello.WriteByte(0) // session id length
+	put16(&hello, 0x0002)
+	hello.Write([]byte{0x00, 0x2f}) // cipher suites TLS_RSA
+	hello.WriteByte(1)
+	hello.WriteByte(0) // compression
+	put16(&hello, uint16(len(extBody.B)))
+	hello.Write(extBody.B) // extensions
 
 	body := hello.B
 	// handshake record: type ClientHello 0x01, 3-byte length
@@ -189,7 +194,7 @@ func buildClientHello(domain string) []byte {
 
 type bytesBuffer struct{ B []byte }
 
-func (b *bytesBuffer) Write(p []byte)   { b.B = append(b.B, p...) }
+func (b *bytesBuffer) Write(p []byte)         { b.B = append(b.B, p...) }
 func (b *bytesBuffer) WriteByte(c byte) error { b.B = append(b.B, c); return nil }
 
 func put16(b *bytesBuffer, v uint16) {
@@ -208,9 +213,9 @@ func buildDNSQuery(domain string) []byte {
 		out = append(out, byte(len(label)))
 		out = append(out, label...)
 	}
-	out = append(out, 0)      // root
-	out = append(out, 0, 1)   // A
-	out = append(out, 0, 1)   // IN
+	out = append(out, 0)    // root
+	out = append(out, 0, 1) // A
+	out = append(out, 0, 1) // IN
 	return out
 }
 

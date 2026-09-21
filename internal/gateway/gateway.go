@@ -57,6 +57,9 @@ type Gateway struct {
 	dpiEng     *dpi.Engine
 	m          *metrics.Registry
 	logger     *logging.Pipeline
+	shadow     *policy.Shadow
+	traces     *traceRing
+	revStore   *rules.RevisionStore
 
 	fast   chan *job // bounded
 	slow   chan *job // bounded
@@ -66,7 +69,22 @@ type Gateway struct {
 
 	classifies atomic.Uint64
 	slowPass   atomic.Uint64
+	// latency aggregations for Prometheus (count + sum ns), recorded in finish().
+	detLatC atomic.Uint64
+	detLatS atomic.Uint64
+	polLatC atomic.Uint64
+	polLatS atomic.Uint64
+	// nfOverflows counts NFQUEUE queue-overflow drops (set by the NFQ source).
+	nfOverflows atomic.Int64
+	// nfDepth holds the current NFQUEUE queue depth (0 when not using NFQUEUE).
+	nfDepth atomic.Int64
 }
+
+// SetNFQueueDepth reports the current NFQUEUE queue depth for observability.
+func (g *Gateway) SetNFQueueDepth(depth int64) { g.nfDepth.Store(depth) }
+
+// SetNFOverflows records the NFQUEUE queue-overflow drop counter value.
+func (g *Gateway) SetNFOverflows(v int64) { g.nfOverflows.Store(v) }
 
 // New builds a gateway. Call Start to launch workers.
 func New(cfg *config.Config, repo *rules.RuleRepo, m *metrics.Registry, logger *logging.Pipeline, det *detect.Engine, d *dpi.Engine) *Gateway {
@@ -78,6 +96,7 @@ func New(cfg *config.Config, repo *rules.RuleRepo, m *metrics.Registry, logger *
 		logger:   logger,
 		baseRepo: repo,
 		flows:    flow.NewTable(cfg.Runtime.FlowShards, time.Duration(cfg.Runtime.FlowTTL)*time.Second),
+		traces:   newTraceRing(1024),
 		fast:     make(chan *job, cfg.Runtime.ChannelCapacity),
 		slow:     make(chan *job, cfg.Runtime.ChannelCapacity),
 		stopCh:   make(chan struct{}),
@@ -85,6 +104,11 @@ func New(cfg *config.Config, repo *rules.RuleRepo, m *metrics.Registry, logger *
 	}
 	g.repo.Store(repo)
 	g.pol.Store(policy.NewEngine(repo))
+	g.shadow = policy.NewShadow(g.pol.Load())
+	// Revision store applies atomically to the currently active repo so the
+	// data plane never observes a half-applied rule set.
+	g.revStore = rules.NewRevisionStore(func(rs []*rules.Rule) { g.Rules().Replace(rs) })
+	g.revStore.EnableBootRevision(repo, "system")
 	g.SetMode(cfg.Default.Mode)
 	return g
 }
@@ -157,15 +181,70 @@ func (g *Gateway) setActiveRepo(repo *rules.RuleRepo) {
 	eng := policy.NewEngine(repo)
 	g.pol.Store(eng)
 	g.repo.Store(repo)
+	g.shadowCurrent(eng)
+}
+
+// shadowCurrent rebinds the shadow's enforced-engine reference.
+func (g *Gateway) shadowCurrent(eng *policy.Engine) {
+	if g.shadow != nil {
+		g.shadow.SetCurrent(eng)
+	}
+}
+
+// SetShadowCandidate installs the observe-only rule set for shadow validation.
+func (g *Gateway) SetShadowCandidate(repo *rules.RuleRepo, revision int64) {
+	if g.shadow != nil {
+		g.shadow.SetCandidateRepo(repo, revision)
+	}
+}
+
+// ShadowStats returns shadow-mode counters.
+func (g *Gateway) ShadowStats() map[string]int64 {
+	if g.shadow == nil {
+		return nil
+	}
+	return g.shadow.Stats()
+}
+
+// ShadowActive reports whether shadow (observe-only) evaluation is enabled by
+// configuration.
+func (g *Gateway) ShadowActive() bool { return g.cfg != nil && g.cfg.Shadow.Enabled }
+
+// shadowHasCandidate reports when a shadow candidate rule set is installed for
+// observe-only validation.
+func (g *Gateway) shadowHasCandidate() bool {
+	return g.shadow != nil && g.shadow.HasCandidate()
+}
+
+// ShadowHasCandidate reports whether a shadow candidate rule set is loaded for
+// observe-only validation.
+func (g *Gateway) ShadowHasCandidate() bool { return g.shadowHasCandidate() }
+
+// ShadowCandidateRevision returns the revision id the shadow is validating
+// (0 when no candidate is installed).
+func (g *Gateway) ShadowCandidateRevision() int64 {
+	if g.shadow == nil {
+		return 0
+	}
+	return g.shadow.CandidateRevision()
+}
+
+// boolToInt64 renders a bool as a Prometheus gauge value.
+func boolToInt64(b bool) int64 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // Exported accessors for the dashboard / API.
-func (g *Gateway) Table() *flow.Table           { return g.flows }
-func (g *Gateway) Metrics() *metrics.Registry   { return g.m }
-func (g *Gateway) Rules() *rules.RuleRepo       { return g.repo.Load() }
-func (g *Gateway) Detector() *detect.Engine     { return g.det }
-func (g *Gateway) Classifies() (c, slow uint64) { return g.classifies.Load(), g.slowPass.Load() }
-func (g *Gateway) Uptime() time.Time            { return g.start }
+func (g *Gateway) Table() *flow.Table                  { return g.flows }
+func (g *Gateway) Metrics() *metrics.Registry          { return g.m }
+func (g *Gateway) Rules() *rules.RuleRepo              { return g.repo.Load() }
+func (g *Gateway) RevisionStore() *rules.RevisionStore { return g.revStore }
+func (g *Gateway) Detector() *detect.Engine            { return g.det }
+func (g *Gateway) Classifies() (c, slow uint64)        { return g.classifies.Load(), g.slowPass.Load() }
+func (g *Gateway) Uptime() time.Time                   { return g.start }
 
 // LogStats returns logging pipeline shedding counters.
 func (g *Gateway) LogStats() map[string]int64 {
@@ -313,12 +392,15 @@ func (g *Gateway) finish(j *job, slow bool) {
 	cat := f.Category
 	if slow {
 		// Slow Path: detection engine + optional sampled DPI.
+		detStart := time.Now()
 		det := g.det.Lookup(detect.Sample{
 			Proto:   j.t.Transport,
 			DstPort: f.DstPort,
 			Data:    j.t.Sample,
 			SNI:     f.SNI,
 		}, j.t.Features)
+		g.detLatC.Add(1)
+		g.detLatS.Add(uint64(time.Since(detStart).Nanoseconds()))
 		detRep = &policy.DetectionReport{
 			Protocol: det.Protocol, Confidence: det.Confidence,
 			AutoApply: det.AutoApply, Action: string(det.Action),
@@ -334,15 +416,33 @@ func (g *Gateway) finish(j *job, slow bool) {
 	// Load one engine snapshot; use its embedded repo for hit accounting so
 	// Decide and RecordHit always observe the same rule set.
 	eng := g.pol.Load()
-	fd := eng.Decide(&policy.Input{
+	path := policy.PathFast
+	if slow {
+		path = policy.PathSlow
+	}
+	tr := g.traceGate()
+	polStart := time.Now()
+	fd := eng.DecideWithTrace(&policy.Input{
 		Attributes: a, Detection: detRep, DPICat: cat, Mode: g.Mode(),
-	})
+	}, path, tr)
+	g.polLatC.Add(1)
+	g.polLatS.Add(uint64(time.Since(polStart).Nanoseconds()))
 	f.Action = flow.Action(fd.Action)
 	f.MatchedRule = fd.MatchedRule
 	// Account hit counters for every rule that contributed to this decision.
 	eng.RuleRepo.RecordHit(fd.MatchedRules)
 	if cat != "" && fd.Category == "" {
 		f.Category = cat
+	}
+	if tr != nil {
+		tr.ActionSource = fd.ActionSource
+		g.recordTrace(tr, f)
+	}
+	// Shadow: evaluate the flow hypothetically against the candidate set.
+	if g.shadow != nil && slow {
+		g.shadow.Compare(&policy.Input{
+			Attributes: a, Detection: detRep, DPICat: cat, Mode: g.Mode(),
+		})
 	}
 	f.Classified = true
 

@@ -79,7 +79,7 @@ type cidrNode struct {
 
 // cidrTree is a binary radix tree over IP prefixes.
 type cidrTree struct {
-	root v4Node
+	root  v4Node
 	root6 v6Node
 }
 
@@ -354,6 +354,95 @@ func (c *CompiledSet) Eval(a *Attributes) (*Decision, []*Rule) {
 	return nil, nil
 }
 
+// Buckets is the result of rule evaluation split by priority layer, so callers
+// (decision trace / explain) can see exactly which layer overrode which.
+type Buckets struct {
+	Allow    []*Rule
+	Block    []*Rule
+	Category []*Rule
+	Others   []*Rule
+	Decision *Decision // winning decision (nil when no rule matched)
+}
+
+// Layer returns the winning layer key ("allow","block","category","others") or
+// "" when no rule matched.
+func (b *Buckets) Layer() string {
+	switch {
+	case len(b.Allow) > 0:
+		return "allow"
+	case len(b.Block) > 0:
+		return "block"
+	case len(b.Category) > 0:
+		return "category"
+	case len(b.Others) > 0:
+		return "others"
+	}
+	return ""
+}
+
+// EvalBuckets evaluates against the compiled set but preserves each priority
+// layer separately. Like Eval, it obeys allow > block > category > others.
+func (c *CompiledSet) EvalBuckets(a *Attributes) *Buckets {
+	b := &Buckets{}
+	c.collect(a, &b.Allow, &b.Block, &b.Category, &b.Others)
+	switch {
+	case len(b.Allow) > 0:
+		b.Decision = pick(b.Allow)
+	case len(b.Block) > 0:
+		b.Decision = pick(b.Block)
+	case len(b.Category) > 0:
+		b.Decision = pick(b.Category)
+	case len(b.Others) > 0:
+		b.Decision = pick(b.Others)
+	}
+	return b
+}
+
+// collect is the shared matcher walk used by Eval and EvalBuckets.
+func (c *CompiledSet) collect(a *Attributes, allow, block, category, others *[]*Rule) {
+	seen := map[*Rule]bool{}
+	dom := normalize(a.Domain)
+	if dom != "" {
+		for _, r := range c.exact[dom] {
+			classifyRule(r, a, allow, block, category, others, seen)
+		}
+		for _, r := range c.suffix.lookup(dom) {
+			classifyRule(r, a, allow, block, category, others, seen)
+		}
+	}
+	if a.DstIP != nil {
+		if v4 := a.DstIP.To4(); v4 != nil {
+			var key [16]byte
+			copy(key[0:4], v4)
+			for _, r := range c.ipExact[key] {
+				classifyRule(r, a, allow, block, category, others, seen)
+			}
+			var ip [4]byte
+			copy(ip[:], v4)
+			for _, r := range c.cidr.lookup4(ip) {
+				classifyRule(r, a, allow, block, category, others, seen)
+			}
+		} else {
+			var ip6 [16]byte
+			copy(ip6[:], a.DstIP.To16())
+			for _, r := range c.ipExact[ip6] {
+				classifyRule(r, a, allow, block, category, others, seen)
+			}
+			for _, r := range c.cidr.lookup6(ip6) {
+				classifyRule(r, a, allow, block, category, others, seen)
+			}
+		}
+	}
+	for _, r := range c.linear {
+		if seen[r] {
+			continue
+		}
+		if ruleMatches(r, a) {
+			classifyRule(r, a, allow, block, category, others, seen)
+		}
+	}
+}
+
 func classifyRule(r *Rule, a *Attributes, allow, block, category, others *[]*Rule, seen map[*Rule]bool) {
 	if seen[r] {
 		return
@@ -547,6 +636,31 @@ func (r *RuleRepo) Eval(a *Attributes) (*Decision, []*Rule) {
 	compiled := r.compiled
 	r.mu.RUnlock()
 	return compiled.Eval(a)
+}
+
+// EvalBuckets runs matching against current rules, preserving priority layers.
+func (r *RuleRepo) EvalBuckets(a *Attributes) *Buckets {
+	r.mu.RLock()
+	compiled := r.compiled
+	r.mu.RUnlock()
+	return compiled.EvalBuckets(a)
+}
+
+// ConflictsBetween returns rule pairs from `other` that conflict with rules in
+// the current set (used by trace to surface skipped/overridden rules).
+func (r *RuleRepo) ConflictsBetween(other []*Rule) []*Rule {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []*Rule
+	for _, o := range other {
+		for _, cur := range r.rules {
+			if ok, _ := o.ConflictsWith(cur); ok {
+				out = append(out, cur)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // RecordHit increments hit counter for matched rule ids.

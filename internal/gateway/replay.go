@@ -1,13 +1,15 @@
 package gateway
 
 import (
+	"context"
 	"os"
 	"sync"
 	"time"
 
-	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcapgo"
+
+	"gfw-x/internal/pipeline"
 )
 
 // Replay is a real-traffic input that reads a classic .pcap capture and feeds
@@ -78,7 +80,8 @@ func (r *Replay) loop(f *os.File, reader *pcapgo.Reader) {
 			// EOF (or corrupt tail) ends the replay.
 			return
 		}
-		if t := r.g.ingestFromReplay(data, lt); t {
+		pkt := &pipeline.Packet{Data: data, Captured: time.Now(), Link: lt}
+		if r.g.HandlePacket(context.Background(), pkt) != "" {
 			if pacing > 0 {
 				if now := time.Now(); !last.IsZero() {
 					if d := now.Sub(last); d < pacing {
@@ -91,50 +94,13 @@ func (r *Replay) loop(f *os.File, reader *pcapgo.Reader) {
 	}
 }
 
-// ingestFromReplay decodes one captured frame and feeds the gateway. Returns
-// false when the frame carries no classifiable L3/L4 data or is malformed.
+// ingestFromReplay is retained for API compatibility but the decode hot path now
+// lives in pipeline.DecodePacket via HandlePacket.
 func (g *Gateway) ingestFromReplay(data []byte, lt layers.LinkType) bool {
-	pkt := gopacket.NewPacket(data, lt, gopacket.DecodeOptions{NoCopy: true, Lazy: true})
-	netL := pkt.NetworkLayer()
-	if netL == nil {
+	in, err := pipeline.DecodePacket(&pipeline.Packet{Data: data, Link: lt})
+	if err != nil || in == nil {
 		return false
 	}
-	transL := pkt.TransportLayer()
-	srcEP, dstEP := netL.NetworkFlow().Endpoints()
-	if srcEP == gopacket.InvalidEndpoint || dstEP == gopacket.InvalidEndpoint {
-		return false
-	}
-
-	transport, srcPort, dstPort := "", 0, 0
-	var payload []byte
-	switch tr := transL.(type) {
-	case *layers.TCP:
-		transport, srcPort, dstPort = "tcp", int(tr.SrcPort), int(tr.DstPort)
-		payload = tr.LayerPayload()
-	case *layers.UDP:
-		transport, srcPort, dstPort = "udp", int(tr.SrcPort), int(tr.DstPort)
-		payload = tr.LayerPayload()
-	default:
-		// ICMP / ARP / bare IP: pass through with no ports; gateway treats
-		// them as unknown (slow path) only if they look relevant.
-		return false
-	}
-	if len(payload) > 1024 {
-		payload = payload[:1024]
-	}
-
-	g.Ingest(&Traffic{
-		SrcIP:       srcEP.String(),
-		DstIP:       dstEP.String(),
-		SrcPort:     uint16(srcPort),
-		DstPort:     uint16(dstPort),
-		Transport:   transport,
-		Sample:      payload,
-		UpBytes:     uint64(len(payload)),
-		DownBytes:   0,
-		UpPkts:      1,
-		DownPkts:    0,
-		LifetimeSec: 0.5,
-	})
+	g.HandlePacket(context.Background(), &pipeline.Packet{Data: data, Captured: time.Now(), Link: lt})
 	return true
 }

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	"gfw-x/internal/config"
 	"gfw-x/internal/gateway"
@@ -45,8 +46,16 @@ func (s *Server) routes() {
 	// Liveness probe must be reachable without credentials, otherwise
 	// health.sh / Docker HEALTHCHECK / systemd all report failure.
 	s.mux.HandleFunc("/api/health", s.handleHealth)
+	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	s.mux.Handle("/api/", s.requireAuth(http.HandlerFunc(s.apiHandler)))
 	s.mux.Handle("/", s.staticHandler())
+}
+
+// handleMetrics exposes Prometheus text metrics scoped to the data plane.
+// It is intentionally public (no auth) so scrapers do not need credentials.
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	_, _ = io.WriteString(w, s.gw.PrometheusText())
 }
 
 // apiHandler dispatches API subroutes.
@@ -67,6 +76,10 @@ func (s *Server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		s.handleProtocols(w, r)
 	case p == "/analytics":
 		s.handleAnalytics(w, r)
+	case p == "/traces":
+		s.handleTraces(w, r)
+	case p == "/shadow":
+		s.handleShadow(w, r)
 	case p == "/mode":
 		s.handleMode(w, r)
 	case p == "/rules":
@@ -75,6 +88,16 @@ func (s *Server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		s.handleRuleSearch(w, r)
 	case p == "/rules/conflicts":
 		s.handleRuleConflicts(w, r)
+	case p == "/rules/dry-run":
+		s.handleRuleDryRun(w, r)
+	case p == "/rules/apply":
+		s.handleRuleApply(w, r)
+	case p == "/rules/rollback":
+		s.handleRuleRollback(w, r)
+	case p == "/rules/revisions":
+		s.handleRuleRevisions(w, r)
+	case strings.HasPrefix(p, "/rules/revisions/"):
+		s.handleRuleRevisionGet(w, r)
 	case p == "/rules/presets":
 		s.handlePresets(w, r)
 	case p == "/rules/import/preview":
@@ -164,6 +187,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	ip := s.auth.RemoteIP(r)
+	if !s.auth.allowLogin(ip) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many login attempts, retry later"})
+		return
+	}
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -175,14 +203,36 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"ok": "true", "csrf": s.auth.CSRF()})
 		return
 	}
-	if body.Username != s.auth.username || !s.auth.verifyPassword(body.Password) {
+	// First-run / reset bootstrap: when no password hash is configured, expose a
+	// setup signal instead of a working default credential.
+	if !s.auth.PasswordConfigured() {
+		if body.Username == "" || body.Password == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "no admin password configured; set one to unlock the dashboard", "requires_setup": "true"})
+			return
+		}
+		s.auth.SetPassword(body.Password, body.Username)
+	}
+	if body.Username != s.auth.username {
+		s.auth.recordFailure(ip)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: "gfwx_session", Value: s.auth.token, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 86400 * 7,
-	})
+	if ok, _ := s.auth.verifyPassword(body.Password); !ok {
+		s.auth.recordFailure(ip)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
+		return
+	}
+	s.auth.resetFailCount(ip)
+	// Rotate the session so a fresh login invalidates any prior token, and
+	// return the new CSRF token.
+	newToken := s.auth.issueSession()
+	sameSite := http.SameSiteStrictMode
+	c := &http.Cookie{
+		Name: "gfwx_session", Value: newToken, Path: "/",
+		HttpOnly: true, SameSite: sameSite, MaxAge: int((12 * time.Hour).Seconds()),
+		Secure: r.TLS != nil,
+	}
+	http.SetCookie(w, c)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true", "csrf": s.auth.CSRF()})
 }
 

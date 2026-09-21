@@ -11,31 +11,31 @@ type Preset struct {
 
 // predefined categories used by *_CATEGORY rules.
 const (
-	CatSocial   = "social-media-overseas"
-	CatAdult    = "adult"
-	CatGambling = "gambling"
+	CatSocial    = "social-media-overseas"
+	CatAdult     = "adult"
+	CatGambling  = "gambling"
 	CatMalicious = "malicious"
-	CatVPN      = "vpn-tunnel"
+	CatVPN       = "vpn-tunnel"
 )
 
 // CategoryCatalog is exposed to the dashboard so users know which categories
 // a preset can intercept. It is a *reference catalog*, not an IP-based blocklist.
 var CategoryCatalog = map[string]string{
-	CatSocial:   "Overseas social media (user-configurable)",
-	CatAdult:    "Adult websites",
-	CatGambling: "Gambling websites",
+	CatSocial:    "Overseas social media (user-configurable)",
+	CatAdult:     "Adult websites",
+	CatGambling:  "Gambling websites",
 	CatMalicious: "Malicious / malware / phishing",
-	CatVPN:      "Known VPN / tunneling services",
+	CatVPN:       "Known VPN / tunneling services",
 }
 
 // categoryBlock builds a BLOCK_CATEGORY rule.
 func categoryBlock(cat string) *Rule {
 	return &Rule{
-		ID:      NewID("preset"),
-		Kind:    KindBlock,
-		Enabled: true,
+		ID:       NewID("preset"),
+		Kind:     KindBlock,
+		Enabled:  true,
 		Category: cat,
-		Source:  "preset",
+		Source:   "preset",
 		Matchers: []Matcher{{Field: FieldCategory(), Value: cat}},
 	}
 }
@@ -80,15 +80,20 @@ func allowSni(name string) *Rule {
 func PresetBy(name string) (*Preset, bool) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "balanced":
-		p := balanced(); return &p, true
+		p := balanced()
+		return &p, true
 	case "strict":
-		p := strict(); return &p, true
+		p := strict()
+		return &p, true
 	case "developer":
-		p := developer(); return &p, true
+		p := developer()
+		return &p, true
 	case "minimal":
-		p := minimal(); return &p, true
+		p := minimal()
+		return &p, true
 	case "custom":
-		p := custom(); return &p, true
+		p := custom()
+		return &p, true
 	}
 	return nil, false
 }

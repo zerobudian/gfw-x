@@ -2,7 +2,7 @@
 # Build, test, benchmark and package GFW X.
 
 BINARY   := gfwx
-VERSION  ?= 0.1.0
+VERSION  ?= 1.1.0
 COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 DATE     ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS  := -s -w \
@@ -11,9 +11,15 @@ LDFLAGS  := -s -w \
 	-X gfw-x/internal/version.Date=$(DATE)
 WEB_DIR  := web
 EMBED_DIST := internal/api/dist
+DIST_DIR := dist
 GO       ?= go
 
-.PHONY: all web build test vet bench release docker run clean help
+# List of cross-compile targets (os arch) for the main `release` target.
+PLATFORMS := linux amd64 linux arm64 darwin amd64 darwin arm64 windows amd64
+# Linux-only targets used by `release-linux` / CI.
+PLATFORMS_LINUX := linux amd64 linux arm64
+
+.PHONY: all web build test vet bench sbom notes release release-linux docker run clean help
 
 all: build
 
@@ -39,16 +45,49 @@ bench:
 
 ## release: cross-compile release artifacts into ./dist
 release: web
-	@mkdir -p dist
-	@set -e; for t in "linux amd64" "linux arm64" "darwin amd64" "darwin arm64" "windows amd64"; do \
+	@mkdir -p $(DIST_DIR)
+	@set -e; for t in $(PLATFORMS); do \
 		set -- $$t; os=$$1; arch=$$2; \
-		out=dist/$(BINARY)-$$os-$$arch; \
+		out=$(DIST_DIR)/$(BINARY)-$$os-$$arch; \
 		if [ "$$os" = "windows" ]; then out=$$out.exe; fi; \
 		echo ">> building $$os/$$arch"; \
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $$out ./cmd/gfwx; \
 	done
-	@echo ">> artifacts in ./dist"
-	@ls -lh dist
+	@echo ">> artifacts in ./$(DIST_DIR)"
+	@ls -lh $(DIST_DIR)
+
+## release-linux: cross-compile linux binaries into ./dist and write SHA256SUMS.txt
+release-linux: web
+	@mkdir -p $(DIST_DIR)
+	@rm -f $(DIST_DIR)/SHA256SUMS.txt
+	@set -e; for t in $(PLATFORMS_LINUX); do \
+		set -- $$t; os=$$1; arch=$$2; \
+		out=$(DIST_DIR)/$(BINARY)-$$os-$$arch; \
+		echo ">> building $$os/$$arch"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $$out ./cmd/gfwx; \
+		(cd $(DIST_DIR) && sha256sum $(BINARY)-$$os-$$arch >> SHA256SUMS.txt); \
+	done
+	@echo ">> SHA256SUMS written to ./$(DIST_DIR)/SHA256SUMS.txt"
+	@cat $(DIST_DIR)/SHA256SUMS.txt
+
+## sbom: generate a minimal SPDX SBOM snapshot every time a version is stamped
+sbom:
+	@mkdir -p $(DIST_DIR)
+	@bash scripts/sbom.sh $(VERSION)
+
+## notes: generate a CHANGELOG/release-notes placeholder for the current version
+notes:
+	@mkdir -p $(DIST_DIR)
+	@printf '%s\n' \
+		"# Release notes: gfw-x $(VERSION)" \
+		"" \
+		"Release date: $(DATE)" \
+		"Commit: $(COMMIT)" \
+		"" \
+		"## Highlights" \
+		"- TODO: summarize notable changes and breaking changes for $(VERSION)." \
+		> $(DIST_DIR)/release-notes-$(VERSION).md
+	@echo ">> wrote ./$(DIST_DIR)/release-notes-$(VERSION).md"
 
 ## docker: build the container image
 docker:
@@ -60,7 +99,7 @@ run:
 
 ## clean: remove build artifacts
 clean:
-	rm -rf $(BINARY) dist
+	rm -rf $(BINARY) $(DIST_DIR)
 	rm -rf $(WEB_DIR)/node_modules
 	rm -rf $(EMBED_DIST)
 

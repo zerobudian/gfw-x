@@ -70,7 +70,7 @@ func TestSetActiveRepoConcurrentWithWorkers(t *testing.T) {
 			SrcIP: "10.0.0.1", DstIP: "1.2.3.4",
 			SrcPort: 40000 + uint16(i%1000), DstPort: 443,
 			Transport: "udp", Category: "",
-			Sample: []byte{0x16, 0x03, 0x01}, // non-empty to force classification
+			Sample:  []byte{0x16, 0x03, 0x01}, // non-empty to force classification
 			UpBytes: 64, DownBytes: 64,
 		})
 	}

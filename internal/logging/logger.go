@@ -19,17 +19,17 @@ type Storage interface {
 
 // degraded counters track overload shedding.
 type Pipeline struct {
-	queue      chan *Entry
-	storage    Storage
-	redact     bool
+	queue       chan *Entry
+	storage     Storage
+	redact      bool
 	sampleRatio float64 // 1.0 = keep all, <1 sampled
 
-	writers  atomic.Uint64
-	droppedA atomic.Uint64 // full events shed (full metadata unavailable)
-	droppedB atomic.Uint64 // sampled events shed
+	writers   atomic.Uint64
+	droppedA  atomic.Uint64 // full events shed (full metadata unavailable)
+	droppedB  atomic.Uint64 // sampled events shed
 	summaries atomic.Uint64 // events reduced to counters
-	closed   atomic.Bool
-	flushed  atomic.Uint64 // total events written by the drain goroutine (both loops)
+	closed    atomic.Bool
+	flushed   atomic.Uint64 // total events written by the drain goroutine (both loops)
 
 	batchSize int
 	batchWait time.Duration

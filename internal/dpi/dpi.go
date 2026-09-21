@@ -10,17 +10,17 @@ import (
 type Category string
 
 const (
-	CatUnknown     Category = "unknown"
-	CatWeb         Category = "web"
-	CatStreaming   Category = "streaming"
-	CatP2P         Category = "p2p"
-	CatTunnel      Category = "tunnel"
-	CatMessage     Category = "messaging"
-	CatCloud       Category = "cloud"
-	CatGame        Category = "gaming"
-	CatDNS         Category = "dns"
-	CatMail        Category = "mail"
-	CatUpdate      Category = "update"
+	CatUnknown   Category = "unknown"
+	CatWeb       Category = "web"
+	CatStreaming Category = "streaming"
+	CatP2P       Category = "p2p"
+	CatTunnel    Category = "tunnel"
+	CatMessage   Category = "messaging"
+	CatCloud     Category = "cloud"
+	CatGame      Category = "gaming"
+	CatDNS       Category = "dns"
+	CatMail      Category = "mail"
+	CatUpdate    Category = "update"
 )
 
 // Result is the metadata-only output of one DPI inspection.
@@ -37,8 +37,8 @@ type Result struct {
 // known-good traffic. It never inspects the Fast Path for normal flows.
 type Engine struct {
 	// enable/Ratio controls sampling.
-	ratio atomic.Uint64 // float64 bits for sample ratio 0..1
-	enabled atomic.Bool
+	ratio       atomic.Uint64 // float64 bits for sample ratio 0..1
+	enabled     atomic.Bool
 	inspections atomic.Uint64
 }
 

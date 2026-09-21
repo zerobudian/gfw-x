@@ -2,6 +2,9 @@
 /gfwx
 /dist/
 
+# Repo-root release archives (should never be committed into the tree)
+/gfw-x-*.zip
+
 # Web build deps & output
 # NOTE: internal/api/dist/ is intentionally TRACKED. The dashboard bundle is
 # embedded via `//go:embed dist/*`, so committing it keeps a fresh clone able

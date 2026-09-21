@@ -15,9 +15,9 @@ import (
 type Kind string
 
 const (
-	KindAllow    Kind = "allow"
-	KindBlock    Kind = "block"
-	KindObserve  Kind = "observe"
+	KindAllow     Kind = "allow"
+	KindBlock     Kind = "block"
+	KindObserve   Kind = "observe"
 	KindRateLimit Kind = "ratelimit"
 )
 
@@ -53,16 +53,16 @@ type Matcher struct {
 
 // Rule is a single policy rule.
 type Rule struct {
-	ID        string     `yaml:"id" json:"id"`
-	Name      string     `yaml:"name" json:"name"`
-	Kind      Kind       `yaml:"kind" json:"kind"`
-	Enabled   bool       `yaml:"enabled" json:"enabled"`
-	Category  string     `yaml:"category" json:"category"`
-	Matchers  []Matcher  `yaml:"matchers" json:"matchers"`
-	Hits      uint64     `yaml:"hits" json:"hits"`
-	LastHit   time.Time  `yaml:"last_hit" json:"last_hit"`
-	Source    string     `yaml:"source" json:"source,omitempty"` // imported file / preset
-	Comment   string     `yaml:"comment" json:"comment,omitempty"`
+	ID       string    `yaml:"id" json:"id"`
+	Name     string    `yaml:"name" json:"name"`
+	Kind     Kind      `yaml:"kind" json:"kind"`
+	Enabled  bool      `yaml:"enabled" json:"enabled"`
+	Category string    `yaml:"category" json:"category"`
+	Matchers []Matcher `yaml:"matchers" json:"matchers"`
+	Hits     uint64    `yaml:"hits" json:"hits"`
+	LastHit  time.Time `yaml:"last_hit" json:"last_hit"`
+	Source   string    `yaml:"source" json:"source,omitempty"` // imported file / preset
+	Comment  string    `yaml:"comment" json:"comment,omitempty"`
 }
 
 // NewID allocates a stable, short rule id.

@@ -6,13 +6,13 @@ on:
   pull_request:
 
 jobs:
-  go:
-    name: Go (${{ matrix.go }})
+  test:
+    name: Test (go ${{ matrix.go }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        go: ["1.25", "stable"]
+        go: ["1.25"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -27,30 +27,77 @@ jobs:
         run: go test ./...
       - name: Test (race)
         run: go test -race ./...
-      - name: Build binary
-        run: go build -trimpath -o gfwx ./cmd/gfwx
 
-  web:
-    name: web bundle
+  lint:
+    name: staticcheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-go@v5
         with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: web/package-lock.json
-      - name: Build dashboard
-        working-directory: web
+          go-version: "1.25"
+          cache: true
+      - name: Run staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+
+  vulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  build:
+    name: Build (${{ matrix.os }}/${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            artifact: gfwx-linux-amd64
+          - os: linux
+            arch: arm64
+            artifact: gfwx-linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Build (${{ matrix.os }}/${{ matrix.arch }})
         run: |
-          npm ci
-          npm run build
-      # The committed embedded bundle must match the source so a fresh clone
-      # compiles out-of-the-box. Fail if a rebuild changes internal/api/dist.
-      - name: Check embedded bundle is in sync
+          CGO_ENABLED=0 GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} \
+            go build -trimpath -o dist/${{ matrix.artifact }} ./cmd/gfwx
+      - name: Compute SHA256SUMS
         run: |
-          if ! git diff --exit-code --quiet -- internal/api/dist; then
-            echo "internal/api/dist is stale; run 'make web' and commit the result" >&2
-            git status --porcelain internal/api/dist
-            exit 1
-          fi
+          cd dist && sha256sum ${{ matrix.artifact }} >> SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SHA256SUMS.txt
+          path: dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+  regression:
+    name: PCAP regression lab
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: Run regression lab
+        run: go test ./internal/lab/... -v

@@ -24,23 +24,23 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"mode":             s.gw.Mode(),
-		"mode_valid":       config.ValidModes,
-		"uptime_sec":       int(time.Since(s.gw.Uptime()).Seconds()),
-		"throughput_bps":   s.gw.Metrics().Throughput(),
-		"counters":         snap,
-		"active_flows":     s.gw.Table().ActiveFlows(),
-		"lookup_hits":      s.gw.Table().LookupHits(),
-		"lookup_misses":    s.gw.Table().LookupMisses(),
-		"classifies":       cl,
-		"slow_path":        slow,
-		"cpu_cores":        runtime.GOMAXPROCS(0),
-		"memory_mb":        float64(m.HeapAlloc) / (1024 * 1024),
-		"version":          version.Info(),
-		"detections":       s.gw.Detector().Detections(),
-		"theme":            s.sett.Theme(),
-		"lang":             s.sett.Lang(),
-		"log_degraded":     s.gw.LogStats(),
+		"mode":           s.gw.Mode(),
+		"mode_valid":     config.ValidModes,
+		"uptime_sec":     int(time.Since(s.gw.Uptime()).Seconds()),
+		"throughput_bps": s.gw.Metrics().Throughput(),
+		"counters":       snap,
+		"active_flows":   s.gw.Table().ActiveFlows(),
+		"lookup_hits":    s.gw.Table().LookupHits(),
+		"lookup_misses":  s.gw.Table().LookupMisses(),
+		"classifies":     cl,
+		"slow_path":      slow,
+		"cpu_cores":      runtime.GOMAXPROCS(0),
+		"memory_mb":      float64(m.HeapAlloc) / (1024 * 1024),
+		"version":        version.Info(),
+		"detections":     s.gw.Detector().Detections(),
+		"theme":          s.sett.Theme(),
+		"lang":           s.sett.Lang(),
+		"log_degraded":   s.gw.LogStats(),
 	})
 }
 
@@ -219,8 +219,16 @@ func (s *Server) handleRuleImport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "conflicts detected", "conflicts": conflicts, "imported": imported, "applied": false})
 		return
 	}
-	s.gw.Rules().Replace(imported)
-	writeJSON(w, http.StatusOK, map[string]any{"imported": len(imported), "applied": true})
+	// Route the actual apply through the revision store so every import lands as
+	// an atomic, auditable, rollbackable revision.
+	author := r.FormValue("author")
+	message := r.FormValue("message")
+	rev, err := s.gw.RevisionStore().Apply(imported, author, format, message)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"imported": len(imported), "applied": true, "revision": rev.ID})
 }
 
 // handleRuleImportPreview runs parse/validate + preview without applying.
@@ -241,6 +249,143 @@ func (s *Server) handleRuleImportPreview(w http.ResponseWriter, r *http.Request)
 		"conflicts": conflicts,
 		"applied":   false,
 	})
+}
+
+// handleRuleRevisions lists the revision history (newest first).
+func (s *Server) handleRuleRevisions(w http.ResponseWriter, r *http.Request) {
+	history := s.gw.RevisionStore().History()
+	out := make([]map[string]any, 0, len(history))
+	for _, rv := range history {
+		out = append(out, revisionSummary(rv))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"revisions": out})
+}
+
+// handleRuleRevisionGet returns a single revision and its full rule snapshot.
+func (s *Server) handleRuleRevisionGet(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/rules/revisions/")
+	if id == "" {
+		writeErr(w, fmt.Errorf("missing revision id"))
+		return
+	}
+	rv, ok := s.gw.RevisionStore().Get(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "revision not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"revision": revisionSummary(rv),
+		"rules":    rv.Rules(),
+		"changes":  rv.Changes,
+	})
+}
+
+// handleRuleDryRun validates an incoming set and reports diff + conflicts
+// without touching the live repo. Accepts JSON {"content": "..."} or a
+// urlencoded form field `content` so both the UI and curl can call it.
+func (s *Server) handleRuleDryRun(w http.ResponseWriter, r *http.Request) {
+	data := firstContent(r)
+	if data == "" {
+		writeErr(w, fmt.Errorf("missing content"))
+		return
+	}
+	parsed, err := rules.ParseBytes([]byte(data), guessFormat([]byte(data)))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	prev, perr := s.gw.RevisionStore().DryRun(parsed)
+	if perr != nil {
+		writeJSON(w, http.StatusBadRequest, prev)
+		return
+	}
+	writeJSON(w, http.StatusOK, prev)
+}
+
+// firstContent extracts the `content` value from either a JSON body or a
+// urlencoded form body. These handlers are called by both the dashboard (JSON)
+// and cli/scripts (form), so we tolerate both encodings.
+func firstContent(r *http.Request) string {
+	if data := r.FormValue("content"); data != "" {
+		return data
+	}
+	if r.Body != nil {
+		var b struct {
+			Content string `json:"content"`
+		}
+		if decodeJSON(r, &b) == nil && b.Content != "" {
+			return b.Content
+		}
+	}
+	return ""
+}
+
+// handleRuleApply validates, conflict-checks, dry-runs and atomically applies
+// a full rule set as a new revision. It is the single path for bulk apply and
+// guarantees the data plane never observes a half-applied rule set.
+func (s *Server) handleRuleApply(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Content string `json:"content"`
+		Author  string `json:"author"`
+		Message string `json:"message"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if body.Content == "" {
+		writeErr(w, fmt.Errorf("missing content"))
+		return
+	}
+	parsed, err := rules.ParseBytes([]byte(body.Content), guessFormat([]byte(body.Content)))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	rv, err := s.gw.RevisionStore().Apply(parsed, body.Author, "api", body.Message)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"applied": true, "revision": rv.ID, "rule_count": rv.RuleCount,
+		"changes": revisionSummary(rv)["changes"],
+	})
+}
+
+// handleRuleRollback rolls the active, atomically applied rule set back to the
+// snapshot of a previous revision. The rollback itself is a new revision.
+func (s *Server) handleRuleRollback(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Revision string `json:"revision"`
+		Author   string `json:"author"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if body.Revision == "" {
+		writeErr(w, fmt.Errorf("missing revision to roll back to"))
+		return
+	}
+	rv, err := s.gw.RevisionStore().Rollback(body.Revision, body.Author)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rolled_back": body.Revision, "revision": rv.ID, "rule_count": rv.RuleCount, "changes": rv.Changes})
+}
+
+func revisionSummary(rv *rules.Revision) map[string]any {
+	changes := make([]string, 0, len(rv.Changes))
+	for _, c := range rv.Changes {
+		changes = append(changes, c.Summary())
+	}
+	return map[string]any{
+		"id": rv.ID, "created_at": rv.CreatedAt, "author": rv.Author,
+		"source": rv.Source, "message": rv.Message, "parent_id": rv.ParentID,
+		"rule_count": rv.RuleCount, "changes": changes,
+	}
 }
 
 func (s *Server) handleRuleExport(w http.ResponseWriter, r *http.Request) {
@@ -272,7 +417,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSetTheme(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Theme string `json:"theme"` }
+	var body struct {
+		Theme string `json:"theme"`
+	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, err)
 		return
@@ -282,7 +429,9 @@ func (s *Server) handleSetTheme(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSetLang(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Lang string `json:"lang"` }
+	var body struct {
+		Lang string `json:"lang"`
+	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, err)
 		return
@@ -307,6 +456,52 @@ func (s *Server) handleDetect(w http.ResponseWriter, r *http.Request) {
 		"auto_apply": det.AutoApply(),
 		"detections": det.Detections(),
 	})
+}
+
+// handleTraces serves recent structured decision traces for the Explain /
+// Decision Trace UI entry point.
+func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {
+	n := 50
+	if v := r.URL.Query().Get("n"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil && p > 0 && p <= 500 {
+			n = p
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"traces": s.gw.RecentTraces(n)})
+}
+
+// handleShadow reports shadow-mode disagreement statistics (GET) and manages
+// the observe-only candidate set (POST). POST {revision: id} loads that
+// revision's snapshot as the shadow candidate; POST {} clears it. This lets an
+// operator answer "if revision R went live, how many flows would change?".
+func (s *Server) handleShadow(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		var body struct {
+			Revision string `json:"revision"`
+		}
+		_ = decodeJSON(r, &body)
+		if body.Revision == "" {
+			s.gw.SetShadowCandidate(nil, 0)
+			writeJSON(w, http.StatusOK, map[string]any{"active": false})
+			return
+		}
+		rv, ok := s.gw.RevisionStore().Get(body.Revision)
+		if !ok {
+			writeErr(w, fmt.Errorf("revision %q not found", body.Revision))
+			return
+		}
+		parsed := rv.Rules()
+		n := rules.NewRepo()
+		for _, rl := range parsed {
+			_ = n.Add(rl)
+		}
+		// rev is a non-zero marker so the metrics gauge reports a candidate is
+		// loaded; the authoritative "active" state is HasCandidate().
+		s.gw.SetShadowCandidate(n, 1)
+		writeJSON(w, http.StatusOK, map[string]any{"active": true, "revision": body.Revision})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"active": s.gw.ShadowHasCandidate(), "stats": s.gw.ShadowStats()})
 }
 
 // handleExport streams the diagnostic ZIP.

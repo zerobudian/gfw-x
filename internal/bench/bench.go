@@ -166,7 +166,7 @@ func dpiDelta() float64 {
 		dp.Inspect(sample, "tcp", 443)
 	}
 	with := time.Since(start).Seconds()
-	return (with-base)/float64(n) * 1e9 // ns/op delta
+	return (with - base) / float64(n) * 1e9 // ns/op delta
 }
 
 // buildTLS encodes a minimal TLS ClientHello carrying SNI that our parser reads.

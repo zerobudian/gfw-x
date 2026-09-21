@@ -1,0 +1,7 @@
+{
+  "protocol": "tls",
+  "category": "",
+  "expected_action": "observe",
+  "confidence_min": 0.0,
+  "note": "TLS ClientHello with SNI github.com"
+}

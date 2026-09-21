@@ -1,0 +1,7 @@
+{
+  "protocol": "dns",
+  "category": "",
+  "expected_action": "observe",
+  "confidence_min": 0.0,
+  "note": "DNS query for example.com; sample.pcap smoke had DNS->example.com observe"
+}

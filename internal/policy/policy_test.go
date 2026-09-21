@@ -50,9 +50,9 @@ func TestUnknownDefaultObserve(t *testing.T) {
 func TestHighConfidenceAutoApply(t *testing.T) {
 	e := NewEngine(BaseRepo(t))
 	in := &Input{
-		Mode: config.ModeBlock,
+		Mode:       config.ModeBlock,
 		Attributes: &rules.Attributes{Domain: "unknown.org", DstIP: net.ParseIP("198.51.100.1"), DstPort: 443, Proto: "tcp"},
-		Detection: &DetectionReport{Protocol: "wireguard", Confidence: 0.95, AutoApply: true, Action: "reject"},
+		Detection:  &DetectionReport{Protocol: "wireguard", Confidence: 0.95, AutoApply: true, Action: "reject"},
 	}
 	fd := e.Decide(in)
 	if fd.Action != "reject" {

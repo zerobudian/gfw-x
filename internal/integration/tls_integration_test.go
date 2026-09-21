@@ -17,7 +17,7 @@ func feedTLS(t *testing.T, gw *gateway.Gateway, m *metrics.Registry, seq int, sr
 	before := m.C.Blocked.Load()
 	gw.Ingest(&gateway.Traffic{
 		SrcIP: srcIP, DstIP: dstIP,
-		SrcPort: uint16(40000+seq%6000), DstPort: 443,
+		SrcPort: uint16(40000 + seq%6000), DstPort: 443,
 		Transport: "tcp", Sample: sample,
 		UpBytes: 256, DownBytes: 4096,
 	})

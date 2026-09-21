@@ -12,12 +12,12 @@ import (
 type Action string
 
 const (
-	ActionAllow    Action = "allow"
-	ActionBlock    Action = "block"
-	ActionObserve  Action = "observe"
+	ActionAllow     Action = "allow"
+	ActionBlock     Action = "block"
+	ActionObserve   Action = "observe"
 	ActionRateLimit Action = "ratelimit"
-	ActionReject   Action = "reject"
-	ActionDrop     Action = "drop"
+	ActionReject    Action = "reject"
+	ActionDrop      Action = "drop"
 )
 
 // Protocol is a transport / app protocol label.
@@ -25,17 +25,17 @@ type Protocol string
 
 // Known protocol labels.
 const (
-	ProtoUnknown Protocol = "unknown"
-	ProtoTCP     Protocol = "tcp"
-	ProtoUDP     Protocol = "udp"
-	ProtoDNS     Protocol = "dns"
-	ProtoTLS     Protocol = "tls"
-	ProtoQUIC    Protocol = "quic"
-	ProtoHTTP    Protocol = "http"
+	ProtoUnknown   Protocol = "unknown"
+	ProtoTCP       Protocol = "tcp"
+	ProtoUDP       Protocol = "udp"
+	ProtoDNS       Protocol = "dns"
+	ProtoTLS       Protocol = "tls"
+	ProtoQUIC      Protocol = "quic"
+	ProtoHTTP      Protocol = "http"
 	ProtoWireGuard Protocol = "wireguard"
-	ProtoOpenVPN  Protocol = "openvpn"
-	ProtoGRE      Protocol = "gre"
-	ProtoICMP     Protocol = "icmp"
+	ProtoOpenVPN   Protocol = "openvpn"
+	ProtoGRE       Protocol = "gre"
+	ProtoICMP      Protocol = "icmp"
 )
 
 // Stats holds per-flow byte/bandwidth accounting.
@@ -59,11 +59,11 @@ type Flow struct {
 	DstPort uint16
 
 	// Metadata filled progressively by DNS / TLS / DPI stages.
-	Domain     string // post-DNS hostname
-	SNI        string // TLS server name indication
-	RDNSName   string // reverse lookup, if any
-	ASN        uint32
-	ASNName    string
+	Domain   string // post-DNS hostname
+	SNI      string // TLS server name indication
+	RDNSName string // reverse lookup, if any
+	ASN      uint32
+	ASNName  string
 
 	// State machine.
 	Classified  bool
@@ -72,7 +72,7 @@ type Flow struct {
 	Category    string
 	Confidence  float64
 
-	Sampled  bool
+	Sampled    bool
 	Suspicious bool // flagged by detection engine for slow path
 
 	Stats

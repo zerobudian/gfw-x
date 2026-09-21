@@ -56,48 +56,77 @@ type Sample struct {
 	SNI     string // TLS SNI when known
 }
 
-// Engine performs protocol / tunnel detection and reports confidence.
+// Engine performs protocol / tunnel detection by aggregating the verdicts of
+// all statically registered Detector plugins. Detectors are ABI-stable through
+// internal/detect.Detector; adding one requires registering it (see Register)
+// without touching the data-plane loop.
 type Engine struct {
 	enabled   atomic.Bool
 	autoApply atomic.Bool
 	threshold atomic.Uint64 // float64 bits
 
 	detections atomic.Uint64
+
+	reg *Registry
 }
 
-// NewEngine returns an Engine with defaults.
+// NewEngine returns an Engine with the default built-in detectors registered.
 func NewEngine(enabled bool, threshold float64, autoApply bool) *Engine {
-	e := &Engine{}
+	e := &Engine{reg: NewRegistry()}
+	e.Register(NewFingerprintDetector())
+	e.Register(NewBehaviorDetector())
 	e.SetEnabled(enabled)
 	e.SetAutoApply(autoApply)
 	e.SetThreshold(threshold)
 	return e
 }
 
-// SetEnabled / SetAutoApply / SetThreshold are config methods.
-func (e *Engine) SetEnabled(v bool)          { e.enabled.Store(v) }
-func (e *Engine) SetAutoApply(v bool)         { e.autoApply.Store(v) }
-func (e *Engine) Enabled() bool               { return e.enabled.Load() }
-func (e *Engine) AutoApply() bool             { return e.autoApply.Load() }
-func (e *Engine) SetThreshold(v float64)      { e.threshold.Store(math.Float64bits(v)) }
-func (e *Engine) Threshold() float64          { return math.Float64frombits(e.threshold.Load()) }
-func (e *Engine) Detections() uint64          { return e.detections.Load() }
+// Register adds a Detector plugin and its per-detector counters.
+func (e *Engine) Register(d Detector) { e.reg.Register(d) }
 
-// Lookup analyzes a sample + features and returns a report.
-// It uses protocol fingerprinting + behavioral features (not just ports).
+// DetectorCounters returns per-detector run/panic observability counters,
+// keyed by detector name (bounded cardinality).
+func (e *Engine) DetectorCounters() map[string]DetectorStats { return e.reg.StatsSnapshot() }
+
+// SetEnabled / SetAutoApply / SetThreshold are config methods.
+func (e *Engine) SetEnabled(v bool)      { e.enabled.Store(v) }
+func (e *Engine) SetAutoApply(v bool)    { e.autoApply.Store(v) }
+func (e *Engine) Enabled() bool          { return e.enabled.Load() }
+func (e *Engine) AutoApply() bool        { return e.autoApply.Load() }
+func (e *Engine) SetThreshold(v float64) { e.threshold.Store(math.Float64bits(v)) }
+func (e *Engine) Threshold() float64     { return math.Float64frombits(e.threshold.Load()) }
+func (e *Engine) Detections() uint64     { return e.detections.Load() }
+
+// Lookup analyzes a sample + features and returns a report. It runs every
+// registered detector under a panic guard and aggregates their verdicts: the
+// protocol comes from the highest-confidence protocol-bearing detector and the
+// confidence is the sum of all detector confidences (clamped to 0..1).
 func (e *Engine) Lookup(s Sample, f *Features) Detection {
 	if !e.enabled.Load() {
 		return Detection{Protocol: "none", Action: ActionAllow}
 	}
 	e.detections.Add(1)
-	r := fingerprint(s)
-	behav := behavior(f)
-	reasons := make([]string, 0, len(r.reasons)+len(behav))
-	reasons = append(reasons, r.reasons...)
-	conf := r.confidence
-	for _, br := range behav {
-		reasons = append(reasons, br.reason)
-		conf += br.delta
+
+	var (
+		proto    string
+		conf     float64
+		reasons  []string
+		bestConf float64
+	)
+	feats := Features{}
+	if f != nil {
+		feats = *f
+	}
+	for _, d := range e.reg.Detectors() {
+		res := e.reg.SafeInspect(d, s, feats)
+		conf += res.Confidence
+		reasons = append(reasons, res.Reasons...)
+		// The protocol label comes from the detector asserting one with the
+		// highest confidence (fingerprint typically wins).
+		if res.Protocol != "" && res.Confidence >= bestConf {
+			bestConf = res.Confidence
+			proto = res.Protocol
+		}
 	}
 	if conf < 0 {
 		conf = 0
@@ -106,7 +135,7 @@ func (e *Engine) Lookup(s Sample, f *Features) Detection {
 		conf = 1
 	}
 	d := Detection{
-		Protocol:   r.protocol,
+		Protocol:   proto,
 		Confidence: conf,
 		Reasons:    reasons,
 		Action:     suggest(conf),

@@ -124,6 +124,108 @@ export interface Conflict {
   value: string
 }
 
+// Decision trace (Explain) payloads
+export interface TraceMatchedRule {
+  id: string
+  name?: string
+  kind: string
+  category?: string
+  action: string
+  priority: number
+  label: string
+}
+
+export interface TraceSkippedConflict {
+  rule_a: string
+  rule_b: string
+}
+
+export interface DecisionTrace {
+  flow_id: number
+  src_ip: string
+  dst_ip: string
+  src_port: number
+  dst_port: number
+  proto: string
+  dns_domain?: string
+  sni?: string
+  http_host?: string
+  dpi_category?: string
+  detector?: string
+  detector_confidence?: number
+  detector_reasons?: string[]
+  matched_rules: TraceMatchedRule[]
+  skipped_conflicts?: TraceSkippedConflict[]
+  path: string
+  action: string
+  action_source: string
+  mode: string
+  latency_ns: number
+  time: string
+}
+
+// Rules revision / shadow payloads
+export interface RevisionSummary {
+  id: string
+  created_at: string
+  author: string
+  source?: string
+  message?: string
+  parent_id?: string
+  rule_count: number
+  changes: string[]
+}
+
+export type RuleChangeType = 'added' | 'removed' | 'modified'
+
+export interface RuleChange {
+  type: RuleChangeType
+  rule_id: string
+  before?: string
+  after?: string
+}
+
+export interface RevisionDetail {
+  revision: RevisionSummary
+  rules: Rule[]
+  changes: RuleChange[]
+}
+
+export interface DryRunPreview {
+  valid: boolean
+  incoming_rules: number
+  changes: RuleChange[]
+  conflicts: Conflict[]
+  error?: string
+}
+
+export interface ApplyResult {
+  applied: boolean
+  revision: string
+  rule_count: number
+  changes: string[]
+}
+
+export interface RollbackResult {
+  rolled_back: string
+  revision: string
+  rule_count: number
+  changes: string[]
+}
+
+export interface ShadowStats {
+  evaluations: number
+  would_allow: number
+  would_block: number
+  disagreement: number
+}
+
+export interface ShadowInfo {
+  active: boolean
+  revision?: string
+  stats: ShadowStats | null
+}
+
 export interface DetectInfo {
   enabled: boolean
   threshold: number
@@ -168,6 +270,14 @@ export const api = {
   login: (username: string, password: string) => req<LoginResult>('POST', '/login', { username, password }),
   setTheme: (theme: string) => req<{ theme: string }>('POST', '/settings/theme', { theme }),
   setLang: (lang: string) => req<{ lang: string }>('POST', '/settings/lang', { lang }),
+  traces: () => req<{ traces: DecisionTrace[] }>('GET', '/traces'),
+  revisions: () => req<{ revisions: RevisionSummary[] }>('GET', '/rules/revisions'),
+  revision: (id: string) => req<RevisionDetail>('GET', '/rules/revisions/' + encodeURIComponent(id)),
+  dryRun: (content: string) => req<DryRunPreview>('POST', '/rules/dry-run', { content }),
+  applyRules: (content: string, author?: string, message?: string) => req<ApplyResult>('POST', '/rules/apply', { content, author, message }),
+  rollbackRules: (revision: string, author?: string) => req<RollbackResult>('POST', '/rules/rollback', { revision, author }),
+  shadow: () => req<ShadowInfo>('GET', '/shadow'),
+  shadowSet: (revision?: string) => req<ShadowInfo>('POST', '/shadow', { revision: revision || '' }),
 }
 
 export const rawUrl = (path: string, params: Record<string, string> = {}) => {

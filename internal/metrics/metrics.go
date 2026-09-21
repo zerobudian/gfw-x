@@ -27,35 +27,35 @@ type Event struct {
 
 // Counters are atomic aggregate counters for the dashboard.
 type Counters struct {
-	FlowsSeen   atomic.Int64
-	Packets     atomic.Int64
-	Decisions   atomic.Int64
-	Allowed     atomic.Int64
-	Blocked     atomic.Int64
-	Unknown     atomic.Int64
-	Observed    atomic.Int64
-	RateLimited atomic.Int64
-	Rejected    atomic.Int64
-	Dropped     atomic.Int64
-	BytesUp     atomic.Int64
-	BytesDown   atomic.Int64
+	FlowsSeen    atomic.Int64
+	Packets      atomic.Int64
+	Decisions    atomic.Int64
+	Allowed      atomic.Int64
+	Blocked      atomic.Int64
+	Unknown      atomic.Int64
+	Observed     atomic.Int64
+	RateLimited  atomic.Int64
+	Rejected     atomic.Int64
+	Dropped      atomic.Int64
+	BytesUp      atomic.Int64
+	BytesDown    atomic.Int64
 	BlockedToday atomic.Int64
 }
 
 // Snapshot is a point-in-time read of counters.
 type Snapshot struct {
-	FlowsSeen   int64 `json:"flows_seen"`
-	Packets     int64 `json:"packets"`
-	Decisions   int64 `json:"decisions"`
-	Allowed     int64 `json:"allowed"`
-	Blocked     int64 `json:"blocked"`
-	Unknown     int64 `json:"unknown"`
-	Observed    int64 `json:"observed"`
-	RateLimited int64 `json:"rate_limited"`
-	Rejected    int64 `json:"rejected"`
-	Dropped     int64 `json:"dropped"`
-	BytesUp     int64 `json:"bytes_up"`
-	BytesDown   int64 `json:"bytes_down"`
+	FlowsSeen    int64 `json:"flows_seen"`
+	Packets      int64 `json:"packets"`
+	Decisions    int64 `json:"decisions"`
+	Allowed      int64 `json:"allowed"`
+	Blocked      int64 `json:"blocked"`
+	Unknown      int64 `json:"unknown"`
+	Observed     int64 `json:"observed"`
+	RateLimited  int64 `json:"rate_limited"`
+	Rejected     int64 `json:"rejected"`
+	Dropped      int64 `json:"dropped"`
+	BytesUp      int64 `json:"bytes_up"`
+	BytesDown    int64 `json:"bytes_down"`
 	BlockedToday int64 `json:"blocked_today"`
 }
 
@@ -69,14 +69,14 @@ type Rank struct {
 type Registry struct {
 	C Counters
 
-	mu      sync.Mutex
-	topDom  map[string]int64
-	topRea  map[string]int64
-	proto   map[string]int64
-	events  []*Event
-	evIdx   int
-	evCap   int
-	evID    uint64
+	mu     sync.Mutex
+	topDom map[string]int64
+	topRea map[string]int64
+	proto  map[string]int64
+	events []*Event
+	evIdx  int
+	evCap  int
+	evID   uint64
 
 	// throughput
 	tm *thruMeter
@@ -180,9 +180,9 @@ func (r *Registry) Events() []*Event {
 }
 
 // TopDomains returns top N by count.
-func (r *Registry) TopDomains(n int) []Rank   { return r.rank(r.topDom, n) }
-func (r *Registry) TopReasons(n int) []Rank   { return r.rank(r.topRea, n) }
-func (r *Registry) ProtocolDist() []Rank      { return r.rank(r.proto, 0) }
+func (r *Registry) TopDomains(n int) []Rank { return r.rank(r.topDom, n) }
+func (r *Registry) TopReasons(n int) []Rank { return r.rank(r.topRea, n) }
+func (r *Registry) ProtocolDist() []Rank    { return r.rank(r.proto, 0) }
 
 func (r *Registry) rank(m map[string]int64, n int) []Rank {
 	r.mu.Lock()

@@ -14,6 +14,10 @@ type FinalDecision struct {
 	Category    string
 	Confidence  float64
 	Detected    string // detection protocol, if any
+	// ActionSource states what decided the final action (rule/detector/
+	// default/bypass). Path states which pipeline stage produced it.
+	ActionSource ActionSource
+	Path         TracePath
 	// MatchedRules carries the rules that produced the decision so callers can
 	// account hits. Nil when the default (no-rule) policy applied.
 	MatchedRules []*rules.Rule
@@ -43,13 +47,32 @@ type Engine struct {
 // NewEngine builds a policy engine over a rule repo.
 func NewEngine(repo *rules.RuleRepo) *Engine { return &Engine{RuleRepo: repo} }
 
-// Decide returns the final action for an input.
+// Decide returns the final action for an input (fast path, no trace).
 func (e *Engine) Decide(in *Input) FinalDecision {
-	fd := FinalDecision{Mode: in.Mode}
+	return e.decide(in, nil, PathFast)
+}
+
+// DecideWithTrace returns the final action for an input together with a
+// structured DecisionTrace explaining the priority chain. Callers gate this
+// behind trace sampling / on-demand explain to keep the fast path cheap.
+func (e *Engine) DecideWithTrace(in *Input, path TracePath, tr *DecisionTrace) FinalDecision {
+	if tr == nil {
+		return e.decide(in, nil, path)
+	}
+	return e.decide(in, tr, path)
+}
+
+func (e *Engine) decide(in *Input, tr *DecisionTrace, path TracePath) FinalDecision {
+	fd := FinalDecision{Mode: in.Mode, Path: path}
 
 	// Bypass mode: never enforce, only observe/count.
 	if in.Mode == config.ModeBypass {
 		fd.Action = "observe"
+		fd.ActionSource = SourceBypass
+		if tr != nil {
+			tr.Action, tr.ActionSource = fd.Action, fd.ActionSource
+			tr.Path = PathBypass
+		}
 		return fd
 	}
 
@@ -61,31 +84,110 @@ func (e *Engine) Decide(in *Input) FinalDecision {
 			fd.Action = a
 			fd.Confidence = in.Detection.Confidence
 			fd.Detected = in.Detection.Protocol
+			fd.ActionSource = SourceDetector
+			if tr != nil {
+				tr.Action, tr.ActionSource = fd.Action, fd.ActionSource
+				tr.Detector = in.Detection.Protocol
+				tr.DetectorConf = in.Detection.Confidence
+			}
 			return fd
 		}
 		// allow/observe suggestions do not override rules.
 	}
 
-	// Rule-based decision.
-	d, matched := e.RuleRepo.Eval(in.Attributes)
-	if d == nil {
+	// Rule-based decision (bucket-aware for the trace).
+	if tr != nil {
+		return e.decideBuckets(in, tr, path)
+	}
+	b := e.RuleRepo.EvalBuckets(in.Attributes)
+	if b.Decision == nil {
 		// default policy: unknown → observe (do not blindly drop unknown).
 		fd.Action = "observe"
+		fd.ActionSource = SourceDefault
 		if in.Detection != nil {
 			fd.Confidence = in.Detection.Confidence
 			fd.Detected = in.Detection.Protocol
 		}
 		return fd
 	}
-	fd.Action = d.Action
-	fd.MatchedRule = d.MatchedRule
-	fd.Category = d.Category
-	fd.MatchedRules = matched
-
-	// In block mode only blocking rules act; custom mode uses same rule set
-	// (distinguished by which repo is loaded). Both enforce the rules.
+	fd.Action = b.Decision.Action
+	fd.MatchedRule = b.Decision.MatchedRule
+	fd.Category = b.Decision.Category
+	fd.ActionSource = SourceRuleAction
+	fd.MatchedRules = matchedFromBuckets(b)
 	return fd
 }
+
+func (e *Engine) decideBuckets(in *Input, tr *DecisionTrace, path TracePath) FinalDecision {
+	fd := FinalDecision{Mode: in.Mode, Path: path}
+	tr.Path = path
+
+	b := e.RuleRepo.EvalBuckets(in.Attributes)
+	winning := b.Layer()
+	for _, r := range b.Allow {
+		tr.AddMatched(r, 0)
+	}
+	for _, r := range b.Block {
+		tr.AddMatched(r, 1)
+	}
+	for _, r := range b.Category {
+		tr.AddMatched(r, 2)
+	}
+	for _, r := range b.Others {
+		tr.AddMatched(r, 3)
+	}
+	// Surface skipped/overridden rules from lower layers when a control rule won.
+	if winning != "" {
+		for _, o := range allRules(b) {
+			if isControl(o) {
+				for _, sql := range allRules(b) {
+					if ok, _ := o.ConflictsWith(sql); ok {
+						tr.AddSkipped(o, sql)
+					}
+				}
+			}
+		}
+	}
+
+	if b.Decision == nil {
+		fd.Action = "observe"
+		fd.ActionSource = SourceDefault
+		if in.Detection != nil {
+			fd.Confidence = in.Detection.Confidence
+			fd.Detected = in.Detection.Protocol
+		}
+		tr.Action, tr.ActionSource = fd.Action, fd.ActionSource
+		return fd
+	}
+	fd.Action = b.Decision.Action
+	fd.MatchedRule = b.Decision.MatchedRule
+	fd.Category = b.Decision.Category
+	fd.ActionSource = SourceRuleAction
+	fd.MatchedRules = matchedFromBuckets(b)
+	tr.Action, tr.ActionSource = fd.Action, fd.ActionSource
+	return fd
+}
+
+func matchedFromBuckets(b *rules.Buckets) []*rules.Rule {
+	var out []*rules.Rule
+	for _, r := range b.Allow {
+		out = append(out, r)
+	}
+	for _, r := range b.Block {
+		out = append(out, r)
+	}
+	for _, r := range b.Category {
+		out = append(out, r)
+	}
+	for _, r := range b.Others {
+		out = append(out, r)
+	}
+	return out
+}
+
+func allRules(b *rules.Buckets) []*rules.Rule { return matchedFromBuckets(b) }
+
+func isControl(r *rules.Rule) bool { return r.Kind == rules.KindAllow || r.Kind == rules.KindBlock }
 
 func mapDetectAction(a string) string {
 	switch a {

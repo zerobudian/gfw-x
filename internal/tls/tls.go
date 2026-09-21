@@ -7,18 +7,18 @@ import (
 
 // Errors from SNI extraction.
 var (
-	ErrNotTLS      = fmt.Errorf("tls: not a TLS record")
-	ErrNoSNI       = fmt.Errorf("tls: no SNI")
-	ErrTruncated   = fmt.Errorf("tls: truncated")
+	ErrNotTLS    = fmt.Errorf("tls: not a TLS record")
+	ErrNoSNI     = fmt.Errorf("tls: no SNI")
+	ErrTruncated = fmt.Errorf("tls: truncated")
 )
 
 // ClientHello represents the leading TLS ClientHello metadata we care about.
 type ClientHello struct {
-	SNI         string
-	Version     uint16
-	ALPNProto   []string
-	Extensions  int
-	IsQUICInt   bool // whether initial packet (handshake) on UDP
+	SNI        string
+	Version    uint16
+	ALPNProto  []string
+	Extensions int
+	IsQUICInt  bool // whether initial packet (handshake) on UDP
 }
 
 // HasSNI returns true when an SNI server name was present.

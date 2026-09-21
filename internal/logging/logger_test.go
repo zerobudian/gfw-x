@@ -12,10 +12,10 @@ import (
 // trackingStorage records whether any batch is ever written after Close, and
 // the total number of entries flushed before Close returns.
 type trackingStorage struct {
-	mu              sync.Mutex
-	closed          atomic.Bool
+	mu               sync.Mutex
+	closed           atomic.Bool
 	writesAfterClose int
-	entriesFlushed  atomic.Int64
+	entriesFlushed   atomic.Int64
 }
 
 func (s *trackingStorage) WriteBatch(entries []*Entry) error {

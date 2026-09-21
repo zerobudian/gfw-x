@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -22,6 +23,8 @@ import (
 	"gfw-x/internal/gateway"
 	"gfw-x/internal/logging"
 	"gfw-x/internal/metrics"
+	"gfw-x/internal/nfq"
+	"gfw-x/internal/pipeline"
 	"gfw-x/internal/rules"
 	"gfw-x/internal/version"
 )
@@ -197,17 +200,30 @@ func cmdRun(args []string) int {
 
 	var gen *gateway.Generator
 	var rpl *gateway.Replay
-	if *pcapPath != "" {
-		rpl = gateway.NewReplay(gw, *pcapPath, *pcapRate)
-		if err := rpl.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "pcap replay: %v\n", err)
+	var nfs *nfqSession
+	switch cfg.Dataplane.Mode {
+	case config.DataplaneNFQueue:
+		session, err := startNFQueue(gw, cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "nfqueue data plane: %v\n", err)
 			gw.Stop()
 			pipe.Close()
 			return 1
 		}
-	} else if !*noGen {
-		gen = gateway.NewGenerator(gw, *genRate)
-		gen.Start()
+		nfs = session
+	case config.DataplanePCAP:
+		if *pcapPath != "" {
+			rpl = gateway.NewReplay(gw, *pcapPath, *pcapRate)
+			if err := rpl.Start(); err != nil {
+				fmt.Fprintf(os.Stderr, "pcap replay: %v\n", err)
+				gw.Stop()
+				pipe.Close()
+				return 1
+			}
+		} else if !*noGen {
+			gen = gateway.NewGenerator(gw, *genRate)
+			gen.Start()
+		}
 	}
 	defer func() {
 		if gen != nil {
@@ -215,6 +231,9 @@ func cmdRun(args []string) int {
 		}
 		if rpl != nil {
 			rpl.Stop()
+		}
+		if nfs != nil {
+			nfs.stop()
 		}
 		gw.Stop()
 		pipe.Close()
@@ -227,7 +246,10 @@ func cmdRun(args []string) int {
 			log.Printf("dashboard stopped: %v", err)
 		}
 	}()
-	log.Printf("GFW X %s started (mode=%s)", version.Info(), gw.Mode())
+	log.Printf("GFW X %s started (mode=%s dataplane=%s)", version.Info(), gw.Mode(), cfg.Dataplane.Mode)
+	if nfs != nil {
+		log.Printf("nfqueue data plane active: queue %d (fail_mode=%s)", cfg.Dataplane.NFQueue.QueueNum, cfg.Dataplane.NFQueue.FailMode)
+	}
 	if gen != nil {
 		log.Printf("synthetic traffic generator active at %d ev/s (disable with --no-gen)", *genRate)
 	}
@@ -242,6 +264,54 @@ func cmdRun(args []string) int {
 
 func defaultPresetFor(cfg *config.Config) string {
 	return ""
+}
+
+// nfqSession owns the NFQUEUE data-plane runner lifecycle.
+type nfqSession struct {
+	runner *pipeline.Runner
+	done   chan struct{}
+}
+
+// startNFQueue opens the NFQUEUE source and sink and drives them through the
+// unified pipeline on a fixed worker pool. The verdict sink mirrors queue
+// overflows into the gateway's Prometheus counters. The returned session must
+// be stopped to free the queue cleanly.
+func startNFQueue(gw *gateway.Gateway, cfg *config.Config) (*nfqSession, error) {
+	src, err := nfq.NewSource(cfg.Dataplane.NFQueue)
+	if err != nil {
+		return nil, err
+	}
+	sink, err := nfq.NewSink(src, cfg.Dataplane.NFQueue.FailMode, func(v int64) { gw.SetNFOverflows(v) })
+	if err != nil {
+		src.Stop()
+		return nil, err
+	}
+	proc := pipeline.Processor(func(ctx context.Context, p *pipeline.Packet) (pipeline.Verdict, error) {
+		return gw.HandlePacket(ctx, p), nil
+	})
+	workers := cfg.Dataplane.NFQueue.MaxWorkers
+	if workers < 1 {
+		workers = 1
+	}
+	runner := pipeline.NewRunner(src, proc, sink, workers)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := runner.Run(); err != nil && !errors.Is(err, pipeline.ErrStopped) {
+			log.Printf("nfqueue runner exited: %v", err)
+		}
+	}()
+	return &nfqSession{runner: runner, done: done}, nil
+}
+
+// stop cancels the runner and waits for the source/sink to be released.
+func (s *nfqSession) stop() {
+	if s.runner != nil {
+		s.runner.Stop()
+	}
+	if s.done != nil {
+		<-s.done
+	}
 }
 
 func cmdValidate(args []string) int {

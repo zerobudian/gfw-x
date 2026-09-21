@@ -8,8 +8,12 @@
 
 - **单二进制**：Go 后端 + React/TypeScript 管理面板，前端产物通过 `go:embed` 打进同一可执行文件。
 - **三模式实时切换**：`bypass` / `block` / `custom`，使用轻量、线程安全的原子状态切换，无需重启。
+- **统一数据面**：`PacketSource → Decode → Flow → DPI → Policy → Verdict → PacketSink`，PCAP / 合成流量 / Linux NFQUEUE 共用同一处理链路。
+- **真实网关（Linux）**：NFQUEUE 数据面，支持 IPv4、ACCEPT/DROP、fail-open/fail-closed，非 Linux 平台仍可编译使用 PCAP 模式。
+- **可解释策略**：完整 DecisionTrace（结构化 JSON），说明每个 flow 的最终动作及覆盖层级。
 - **Fast Path / Slow Path**：已知流量一次分类后走缓存，未知/可疑/抽样流量走检测慢通道。
-- **开箱即安全**：默认只监听 localhost，支持管理员认证、CSRF/Origin 防护、隐私脱敏导出。
+- **可观测 & 可回滚**：Prometheus `/metrics`、规则版本化 / Diff / 回滚 / dry-run、Shadow 影子规则。
+- **开箱即安全**：默认只监听 localhost，Argon2id 密码哈希、会话轮转/过期、CSRF/Origin 防护、登录限速、隐私脱敏导出。
 
 ---
 
@@ -59,11 +63,14 @@
 gfw-x/
 ├── cmd/gfwx/            # 程序入口
 ├── internal/
-│   ├── gateway/         # 网关主循环、Fast/Slow Path、流量生成器
-│   ├── flow/            # 分片 flow table / 分类决策
-│   ├── policy/          # 策略与默认策略
-│   ├── rules/           # 规则解析、仓库、冲突检测、预置模板、基准
-│   ├── detect/          # VPN/Tunnel 检测引擎
+│   ├── pipeline/         # 统一数据面抽象（PacketSource/Sink/Packet/Verdict/Runner）
+│   ├── nfq/              # Linux NFQUEUE 数据面（build-tagged）与失败模式
+│   ├── gateway/          # 网关主循环、Fast/Slow Path、流量生成器、Prometheus 输出
+│   ├── flow/             # 分片 flow table / 分类决策
+│   ├── policy/           # 策略与默认策略、DecisionTrace、Shadow 影子规则
+│   ├── rules/            # 规则解析、仓库、冲突检测、预置模板、版本化/回滚、基准
+│   ├── detect/           # 检测器插件 API（registry + panic guard + 置信度）
+│   ├── lab/              # PCAP 回归测试库（testdata/ + expected JSON）
 │   ├── dpi/             # DPI（仅协议/元数据）
 │   ├── dns/             # DNS 辅助
 │   ├── tls/             # TLS SNI 提取
@@ -203,11 +210,56 @@ gfwx version                      打印版本
 | `detect.enabled` | `true` | 检测引擎开关 |
 | `detect.auto_action` | `observe` | 检测命中后的动作 |
 | `detect.confidence_threshold` | `0.85` | 低于该置信度不自动处置 |
+| `dataplane.mode` | `pcap` | 数据面：`pcap`(离线/生成器) 或 `nfqueue`(Linux 真实网关) |
+| `dataplane.nfqueue.queue_num` | `0` | NFQUEUE 队列号 |
+| `dataplane.nfqueue.max_queue_len` | `4096` | 内核队列上限 |
+| `dataplane.nfqueue.verdict_timeout_ms` | `0` | 判定超时（毫秒） |
+| `dataplane.nfqueue.fail_mode` | `open` | 判定失败策略：`open`(放行) / `closed`(丢弃) |
 | `rules_file` | developer 预设 | 启动时加载的规则 |
 | `custom_rules_file` | custom.txt | Custom 模式规则 |
 
-> 密码哈希为 SHA-256 双重加盐。默认 `admin/admin`，**上线前务必更换**，
-> 并将 `server.auth.session_token` 设为随机十六进制（为空时启动会随机生成）。
+> 密码使用 **Argon2id**（随机盐，64 MiB）哈希保存，并可自动迁移旧的 SHA-256
+> 哈希。**上线前务必更换默认 `admin/admin`**（配置校验：带默认哈希时禁止绑定
+> 非回环监听），并将 `server.auth.session_token` 设为随机十六进制。会话登录即
+> 轮转、12 小时过期。
+
+### 数据面：NFQUEUE（真实 Linux 网关）
+
+在 Linux 上把流量交给 gfw-x 处置（IPv4；IPv6 预留）：
+
+```yaml
+dataplane:
+  mode: nfqueue
+  nfqueue:
+    queue_num: 100
+    max_queue_len: 4096
+    verdict_timeout_ms: 1000
+    fail_mode: open        # open | closed
+    max_workers: 4
+```
+
+```bash
+# 让 OUTPUT 的 IPv4 流量进入队列 100（nftables 示例）
+nft add rule inet filter output ip version 4 queue num 100
+
+# 恢复 / 移除
+nft delete rule inet filter output handle <HANDLE>
+```
+
+> gfw-x **不会自行改动宿主机防火墙**，只监听你指定的队列；规则由你添加与移除。
+> 操作前建议备份：`nft list ruleset > firewall-backup.nft`。
+> 非 Linux 平台 `nfqueue` 模式会在启动时报错（PCAP 模式不受影响，可正常构建）。
+
+### 可观测性 / 指标
+
+`GET /metrics` 暴露 Prometheus 文本指标（label 基数受控，不包含 IP/域名/flow ID）：
+`gfwx_packets_total`、`gfwx_bytes_total`、`gfwx_flows_active`、
+`gfwx_fast_path_hits_total`、`gfwx_slow_path_hits_total`、
+`gfwx_policy_evaluations_total`、`gfwx_rule_hits_total`、
+`gfwx_packets_dropped_total`、`gfwx_detector_runs_total`、
+`gfwx_detector_latency_seconds`、`gfwx_policy_latency_seconds`、
+`gfwx_nfqueue_depth`、`gfwx_nfqueue_overflows_total`、`gfwx_log_dropped_total`，
+以及每个检测器的 `{detector=...}` 运行/panic 计数。
 
 ---
 
@@ -260,8 +312,13 @@ ALLOW *.pages.dev
 BLOCK example.com
 ```
 
-导入流程为：`parse → validate → conflict detection → preview → apply`，
+导入流程为：`parse → validate → conflict detection → preview(dry-run) → atomic apply → revision`，
 **不会**在导入后直接覆盖运行配置，需在预览确认后应用。
+每次应用生成一个可审计的 revision；支持
+`GET /api/rules/revisions`、`GET /api/rules/revisions/:id`、
+`POST /api/rules/dry-run`、`POST /api/rules/rollback` 进行**原子回滚**。
+规则系统用统一数据面与 DecisionTrace（`GET /api/traces`）配合，可明确看到
+哪一层规则最终决定了某个 flow 的动作。
 
 ---
 
