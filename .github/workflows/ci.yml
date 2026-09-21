@@ -75,19 +75,73 @@ jobs:
         run: |
           CGO_ENABLED=0 GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} \
             go build -trimpath -o dist/${{ matrix.artifact }} ./cmd/gfwx
-      - name: Compute SHA256SUMS
-        run: |
-          cd dist && sha256sum ${{ matrix.artifact }} >> SHA256SUMS.txt && cat SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
           if-no-files-found: error
+
+  # Assemble release assets: one merged SHA256SUMS.txt (both linux binaries),
+  # a generated SPDX SBOM, and release notes. This runs after the build matrix
+  # so the checksum list is a single combined manifest rather than one per build.
+  release-artifacts:
+    name: Release assets (SHA256SUMS + SBOM)
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: gfwx-linux-amd64
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: gfwx-linux-arm64
+          path: dist/
+      - name: Write merged SHA256SUMS.txt
+        run: |
+          cd dist && sha256sum gfwx-linux-amd64 gfwx-linux-arm64 | tee SHA256SUMS.txt
+      - name: Generate SBOM
+        run: |
+          bash scripts/sbom.sh 1.1.0
+          ls -l dist/sbom.spdx
+      - name: Write release notes
+        run: |
+          printf '%s\n' "# Release notes: gfw-x 1.1.0" "" "- See CHANGELOG.md for the full list." > dist/release-notes-1.1.0.md
       - uses: actions/upload-artifact@v4
         with:
-          name: SHA256SUMS.txt
-          path: dist/SHA256SUMS.txt
+          name: release-assets
+          path: |
+            dist/SHA256SUMS.txt
+            dist/sbom.spdx
+            dist/release-notes-1.1.0.md
           if-no-files-found: error
+
+  # The dashboard bundle is embedded via `//go:embed dist/*`. This job rebuilds
+  # it and fails if the committed bundle drifted from the sources, keeping a
+  # fresh clone able to `go build` without running Node.
+  web:
+    name: Web build (bundle freshness)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install deps
+        run: npm ci
+        working-directory: web
+      - name: Build bundle
+        run: npm run build
+        working-directory: web
+      - name: Assert committed bundle is up to date
+        run: git diff --exit-code internal/api/dist
 
   regression:
     name: PCAP regression lab

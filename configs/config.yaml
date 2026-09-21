@@ -17,9 +17,10 @@ server:
   auth:
     enabled: true
     username: admin
-    # SHA-256(salt+pw) then SHA-256(inner+salt). Default password is: admin
-    # CHANGE THIS. Generate a new hash and set session_token to a random hex.
-    password_hash: "e158d9f24412583212b3d7fb5beab018afb0209364c75b4d69779c37eb75ecc1"
+    # No default password. First startup locks the dashboard until the first
+    # login sets an Argon2id password. To pre-seed a hash, generate one with
+    # `gfwx validate`/auth tooling and paste it here.
+    password_hash: ""
     session_token: ""      # if empty, a random token is generated at startup
 
 logging:

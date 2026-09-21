@@ -56,9 +56,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Authentication hardening**: Argon2id password hashing with random salt,
   transparent legacy hash migration, session rotation + expiry, `HttpOnly` /
   `SameSite=Strict` / `Secure` cookie, first-run admin setup, login rate limit.
-- **Release engineering**: CI building `linux/amd64` + `linux/arm64` with
-  `SHA256SUMS`, plus `go test -race`, `go vet`, `staticcheck`, `govulncheck`;
-  Makefile `release` / `release-linux` / `sbom` / `notes` targets.
+- **Release engineering**: CI builds `linux/amd64` + `linux/arm64`, runs
+  `go test -race`, `go vet`, `staticcheck`, `govulncheck`, verifies the embedded
+  Web bundle stays in sync, and a `release-artifacts` job emits one merged
+  `SHA256SUMS.txt`, a generated SPDX SBOM (`sbom.spdx`) and release notes.
+  Makefile `release` / `release-linux` / `sbom` / `notes` targets cross-compile
+  with correct `os/arch` pairs.
 
 ### Changed
 
@@ -67,6 +70,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - The repo-root `gfw-x-1.0.0.zip` is no longer committed; releases are produced
   by CI / the Makefile only.
 - Session tokens now rotate on each login and expire after 12 hours.
+- Default config no longer ships a working default credential: the dashboard is
+  locked until the first login sets an Argon2id password (first-run setup).
 
 ### Fixed
 

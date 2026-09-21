@@ -64,18 +64,6 @@ func allowSuffix(s string) *Rule {
 	}
 }
 
-// allowSni builds an ALLOW SNI rule.
-func allowSni(name string) *Rule {
-	return &Rule{
-		ID:       NewID("preset"),
-		Kind:     KindAllow,
-		Enabled:  true,
-		Name:     "sni:" + name,
-		Source:   "preset",
-		Matchers: []Matcher{{Field: FieldSNI, Value: name}},
-	}
-}
-
 // PresetBy returns a named preset builder.
 func PresetBy(name string) (*Preset, bool) {
 	switch strings.ToLower(strings.TrimSpace(name)) {

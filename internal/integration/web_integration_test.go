@@ -183,7 +183,7 @@ func TestWebAPI_DataplaneConsistency(t *testing.T) {
 	if got := modeFromStatus(t, c, base, csrf); got != "bypass" {
 		t.Fatalf("status mode after switch=%q want bypass", got)
 	}
-	resp, bbody = doReq(t, c, "GET", base+"/api/mode", "", csrf, nil)
+	_, bbody = doReq(t, c, "GET", base+"/api/mode", "", csrf, nil)
 	var mm struct {
 		Mode string `json:"mode"`
 	}

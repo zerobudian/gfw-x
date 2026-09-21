@@ -59,10 +59,11 @@ func TestValidateRejectsBadLogging(t *testing.T) {
 }
 
 func TestValidateRejectsDefaultCredOnRemoteListener(t *testing.T) {
-	// Default test config carries the well-known default admin hash. A
-	// non-loopback listener must be rejected while it still does.
+	// Seed the well-known default admin hash to exercise the guard: a
+	// non-loopback listener must be rejected while the default hash remains.
 	cfg := DefaultConfig()
 	cfg.Server.Auth.Enabled = true
+	cfg.Server.Auth.PasswordHash = defaultAdminHash
 	cfg.Server.Listen = "192.168.1.5:8443" // private LAN (allowed) but non-loopback
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected rejection: default credential on non-loopback listener")

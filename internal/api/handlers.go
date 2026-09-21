@@ -523,10 +523,6 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, path)
 }
 
-func (s *Server) handleExportRules(w http.ResponseWriter, r *http.Request) {
-	s.handleRuleExport(w, r)
-}
-
 func (s *Server) handleExportConfig(w http.ResponseWriter, r *http.Request) {
 	b := &export.Bundle{Config: s.cfg, Rules: s.gw.Rules().All(), Metrics: s.gw.Metrics(), Format: s.cfg.Logging.Format}
 	dir, _ := os.MkdirTemp("", "gfwx-cfg-*")

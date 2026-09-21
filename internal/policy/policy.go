@@ -169,19 +169,11 @@ func (e *Engine) decideBuckets(in *Input, tr *DecisionTrace, path TracePath) Fin
 }
 
 func matchedFromBuckets(b *rules.Buckets) []*rules.Rule {
-	var out []*rules.Rule
-	for _, r := range b.Allow {
-		out = append(out, r)
-	}
-	for _, r := range b.Block {
-		out = append(out, r)
-	}
-	for _, r := range b.Category {
-		out = append(out, r)
-	}
-	for _, r := range b.Others {
-		out = append(out, r)
-	}
+	out := make([]*rules.Rule, 0, len(b.Allow)+len(b.Block)+len(b.Category)+len(b.Others))
+	out = append(out, b.Allow...)
+	out = append(out, b.Block...)
+	out = append(out, b.Category...)
+	out = append(out, b.Others...)
 	return out
 }
 

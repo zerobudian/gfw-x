@@ -6,13 +6,10 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"gfw-x/internal/config"
 	"gfw-x/internal/rules"
 )
-
-const apiTimeout = 10 * time.Second
 
 // TestRuleRoundTripPreservesSemantics checks that rules survive a
 // parse → serialize → parse cycle in every supported format with identical

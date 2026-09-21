@@ -88,7 +88,7 @@ func TestRulesRevisionLifecycle(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("shadow set: %d %s", resp.StatusCode, body)
 	}
-	resp, body = doReq(t, c, "GET", base+"/api/shadow", "", "", nil)
+	_, body = doReq(t, c, "GET", base+"/api/shadow", "", "", nil)
 	var sh struct {
 		Active bool `json:"active"`
 	}

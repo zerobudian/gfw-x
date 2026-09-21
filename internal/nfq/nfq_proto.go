@@ -71,19 +71,17 @@ type nfqnlMsgConfigParams struct {
 	CopyMode  uint8
 }
 
-// nfqnlMsgPacketHdr mirrors struct nfqnl_msg_packet_hdr (8 bytes on wire).
-type nfqnlMsgPacketHdr struct {
-	PacketID   uint32 // network byte order
-	HWProtocol uint16 // network byte order
-	Hook       uint8
-	Pad        uint8
-}
+// nfqnl_msg_packet_hdr is 8 bytes on the wire:
+//
+//	PacketID    uint32 (network byte order)
+//	HWProtocol  uint16 (network byte order)
+//	Hook        uint8
+//	Pad         uint8
 
-// nfqnlMsgVerdictHdr mirrors struct nfqnl_msg_verdict_hdr (8 bytes on wire).
-type nfqnlMsgVerdictHdr struct {
-	Verdict uint32 // network byte order
-	ID      uint32 // network byte order
-}
+// nfqnl_msg_verdict_hdr is 8 bytes on the wire:
+//
+//	Verdict  uint32 (network byte order)
+//	ID       uint32 (network byte order)
 
 // buildConfigMarshal formats an NFQNL_MSG_CONFIG payload.
 // seq is the netlink sequence number; family is the netfilter family

@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcapgo"
 
 	"gfw-x/internal/pipeline"
@@ -92,15 +91,4 @@ func (r *Replay) loop(f *os.File, reader *pcapgo.Reader) {
 			}
 		}
 	}
-}
-
-// ingestFromReplay is retained for API compatibility but the decode hot path now
-// lives in pipeline.DecodePacket via HandlePacket.
-func (g *Gateway) ingestFromReplay(data []byte, lt layers.LinkType) bool {
-	in, err := pipeline.DecodePacket(&pipeline.Packet{Data: data, Link: lt})
-	if err != nil || in == nil {
-		return false
-	}
-	g.HandlePacket(context.Background(), &pipeline.Packet{Data: data, Captured: time.Now(), Link: lt})
-	return true
 }

@@ -8,7 +8,7 @@
 ## 1. Data-plane model
 
 Every ingress source feeds the same processing chain through a single, narrow
-abstraction in [`internal/pipeline`](../internal/pipeline/pipeline.go):
+abstraction in [`internal/pipeline`](internal/pipeline/pipeline.go):
 
 ```
 PacketSource → Decode → Flow Tracking → Metadata/DPI → Policy → Verdict → PacketSink
@@ -24,7 +24,7 @@ The pipeline `Runner` drives a source through a worker pool into a sink with a
 bounded number of goroutines and natural backpressure (a fast source blocks the
 source's `Next` when workers are saturated). The core policy and detector logic
 never depends on a specific provider — Linux specifics are isolated in
-[`internal/nfq`](../internal/nfq).
+[`internal/nfq`](internal/nfq).
 
 ```
                  ┌──────────────────────────────────────────────────┐
@@ -58,7 +58,7 @@ rather than silently degrading.
 
 ## 2. Linux NFQUEUE backend
 
-[`internal/nfq`](../internal/nfq) implements the `netfilter_queue` netlink
+[`internal/nfq`](internal/nfq) implements the `netfilter_queue` netlink
 protocol directly over `NETLINK_NETFILTER` (no third-party NFQUEUE library —
 only `golang.org/x/sys/unix`).
 
@@ -116,7 +116,7 @@ sampled flows take the slow path through DPI + detectors + policy.
 
 ## 4. Policy engine & DecisionTrace
 
-[`internal/policy`](../internal/policy) combines the rule repo's priority layers
+[`internal/policy`](internal/policy) combines the rule repo's priority layers
 with decision tracing. `DecisionTrace` is structured data (flow id, endpoints,
 protocol, DNS/SNI metadata, detector verdict + confidence, matched/skipped
 rules with the exact priority layer, fast/slow path, final action, action
@@ -136,7 +136,7 @@ path does not allocate large trace objects per packet.
 
 - Detectors are statically registered via the `Detector` interface
   (`Info()`, `Inspect(sample, features) Result`) in
-  [`internal/detect`](../internal/detect). They are stateless (safe under the
+  [`internal/detect`](internal/detect). They are stateless (safe under the
   concurrent worker pool), run under a panic guard, and expose per-detector
   `gfwx_detector_runs_total` / `gfwx_detector_panics_total` counters.
 - `GET /api/traces` returns recent DecisionTrace objects for the dashboard.
@@ -145,7 +145,7 @@ path does not allocate large trace objects per packet.
 
 ## 6. Rules versioning
 
-[`internal/rules/version.go`](../internal/rules/version.go) adds atomic,
+[`internal/rules/version.go`](internal/rules/version.go) adds atomic,
 snapshot-based rule revisions on top of the immutable `CompiledSet`.
 
 - **Apply** validates → diffs → snapshots → single atomic `Replace` on the live
@@ -178,7 +178,7 @@ and per-detector `{detector=...}` counters.
 
 ## 8. PCAP regression lab
 
-[`internal/lab`](../internal/lab) builds deterministic `.pcap` fixtures under
+[`internal/lab`](internal/lab) builds deterministic `.pcap` fixtures under
 `testdata/pcaps`, replays each through a fresh gateway, and compares the result
 against `testdata/expected/*.json`. It reports TP / FP / FN with precision and
 recall (values that cannot be computed for the current dataset are reported as

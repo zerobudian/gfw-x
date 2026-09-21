@@ -247,9 +247,12 @@ func DefaultConfig() *Config {
 			LanOnly:    true,
 			AllowedIps: []string{},
 			Auth: Auth{
-				Enabled:      true,
-				Username:     "admin",
-				PasswordHash: "e158d9f24412583212b3d7fb5beab018afb0209364c75b4d69779c37eb75ecc1", // default password: admin
+				Enabled:  true,
+				Username: "admin",
+				// No hard-coded password hash: the dashboard is locked until the
+				// first login sets an Argon2id password (first-run setup). This
+				// keeps a fresh install from shipping a working default credential.
+				PasswordHash: "",
 			},
 		},
 		Logging: Logging{

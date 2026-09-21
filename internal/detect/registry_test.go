@@ -5,9 +5,7 @@ import (
 )
 
 // panicDetector always panics to exercise data-plane isolation.
-type panicDetector struct {
-	info DetectorInfo
-}
+type panicDetector struct{}
 
 func (d *panicDetector) Info() DetectorInfo { return DetectorInfo{Name: "panicd", Description: "test"} }
 func (d *panicDetector) Inspect(s Sample, f Features) Result {

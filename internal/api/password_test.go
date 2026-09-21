@@ -13,7 +13,8 @@ func TestHashPasswordProducesArgon2PHC(t *testing.T) {
 		t.Fatalf("expected argon2id PHC prefix, got %q", h)
 	}
 	// Two hashes of the same password have different salts.
-	if hashPassword("pw") == hashPassword("pw") {
+	a, b := hashPassword("pw"), hashPassword("pw")
+	if a == b {
 		t.Fatal("salts are not random: identical hashes")
 	}
 }

@@ -14,10 +14,10 @@ EMBED_DIST := internal/api/dist
 DIST_DIR := dist
 GO       ?= go
 
-# List of cross-compile targets (os arch) for the main `release` target.
-PLATFORMS := linux amd64 linux arm64 darwin amd64 darwin arm64 windows amd64
+# List of cross-compile targets (os/arch) for the main `release` target.
+PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 # Linux-only targets used by `release-linux` / CI.
-PLATFORMS_LINUX := linux amd64 linux arm64
+PLATFORMS_LINUX := linux/amd64 linux/arm64
 
 .PHONY: all web build test vet bench sbom notes release release-linux docker run clean help
 
@@ -47,7 +47,7 @@ bench:
 release: web
 	@mkdir -p $(DIST_DIR)
 	@set -e; for t in $(PLATFORMS); do \
-		set -- $$t; os=$$1; arch=$$2; \
+		os=$${t%/*}; arch=$${t#*/}; \
 		out=$(DIST_DIR)/$(BINARY)-$$os-$$arch; \
 		if [ "$$os" = "windows" ]; then out=$$out.exe; fi; \
 		echo ">> building $$os/$$arch"; \
@@ -61,7 +61,7 @@ release-linux: web
 	@mkdir -p $(DIST_DIR)
 	@rm -f $(DIST_DIR)/SHA256SUMS.txt
 	@set -e; for t in $(PLATFORMS_LINUX); do \
-		set -- $$t; os=$$1; arch=$$2; \
+		os=$${t%/*}; arch=$${t#*/}; \
 		out=$(DIST_DIR)/$(BINARY)-$$os-$$arch; \
 		echo ">> building $$os/$$arch"; \
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $$out ./cmd/gfwx; \

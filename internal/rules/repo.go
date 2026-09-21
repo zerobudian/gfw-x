@@ -71,12 +71,6 @@ func (t *suffixTrie) lookup(domain string) []*Rule {
 	return acc
 }
 
-// cidrNode is a node in the CIDR radix tree.
-type cidrNode struct {
-	left, right *cidrNode
-	rules       []*Rule
-}
-
 // cidrTree is a binary radix tree over IP prefixes.
 type cidrTree struct {
 	root  v4Node

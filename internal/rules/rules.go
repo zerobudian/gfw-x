@@ -225,7 +225,7 @@ func ParseTXT(line string, src string) (*Rule, error) {
 	case "RATELIMIT", "RATE_LIMIT":
 		kind, field = KindRateLimit, FieldDomain
 	case "BLOCK_CATEGORY":
-		kind, field = KindBlock, FieldCategory()
+		kind = KindBlock
 		return categoryRule(kind, fields[1], src)
 	case "ALLOW_CATEGORY":
 		kind, field = KindAllow, FieldCategory()

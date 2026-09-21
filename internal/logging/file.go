@@ -24,7 +24,6 @@ type FileStorage struct {
 	f        *os.File
 	curBytes int64
 	w        *csv.Writer
-	written  bool // header written
 }
 
 // NewFileStorage opens a rotating file storage.

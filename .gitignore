@@ -27,3 +27,6 @@ coverage.*
 .vscode/
 .idea/
 .DS_Store
+
+# IDE / preview share packages (not part of the 1.1 deliverable)
+.trae-html-share-packages/
